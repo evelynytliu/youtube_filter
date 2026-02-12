@@ -31,6 +31,15 @@
         <span class="logo-icon">🎈</span>
         <h1 class="logo-text">SafeTube</h1>
       </div>
+
+      <div id="profile-selector" class="profile-selector hidden">
+        <span class="profile-avatar">👤</span>
+        <span id="header-profile-name" class="current-profile-name">Loading...</span>
+        <ul id="profile-dropdown" class="profile-dropdown hidden">
+          <!-- Profiles Injected Here -->
+        </ul>
+      </div>
+
       <div class="header-controls">
         <button id="refresh-btn" class="icon-btn" title="Refresh Videos">🔄</button>
         <button id="settings-btn" class="icon-btn" title="Parent Settings">⚙️</button>
@@ -66,6 +75,28 @@
       <div class="modal-content glass">
         <button id="close-settings" class="close-btn-corner">✖</button>
         <h2>Parent Settings 🔒</h2>
+
+        <section class="settings-section">
+          <h3>Who is watching?</h3>
+          <div class="add-channel-form">
+            <input type="text" id="new-profile-name" placeholder="New Child Name" />
+            <button id="add-profile-btn" class="secondary-btn">Add Child</button>
+          </div>
+          <div id="profile-list-container">
+            <!-- List of profiles -->
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <h3>Google Sync (Optional)</h3>
+          <p class="small-text">Sync your channels across devices using Google Drive.</p>
+          <input type="text" id="client-id-input" placeholder="Google OAuth Client ID" />
+          <button id="save-client-id" class="secondary-btn">Save Client ID</button>
+
+          <button id="google-login-btn" class="primary-btn" style="display:none; margin-top: 10px; width: 100%;">
+            Login with Google
+          </button>
+        </section>
 
         <section class="settings-section">
           <h3>YouTube API Key</h3>
@@ -107,6 +138,7 @@
   <script type="module" src="/src/main.js"></script>
   <!-- Add YouTube Iframe API -->
   <script src="https://www.youtube.com/iframe_api"></script>
+  <script src="https://accounts.google.com/gsi/client"></script>
 </body>
 
 </html>

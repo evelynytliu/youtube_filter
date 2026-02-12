@@ -2,16 +2,31 @@ import './style.css'
 
 // Configuration & State
 const STORAGE_KEY_API = 'safetube_api_key';
-const STORAGE_KEY_CHANNELS = 'safetube_channels';
+const STORAGE_KEY_DATA = 'safetube_data';
+const SCOPES = 'https://www.googleapis.com/auth/drive.appdata';
 
-// Default channels if none exist
-const DEFAULT_CHANNELS = [
-  { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes' },
-  { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs' },
-  { id: 'UXI_4T5eMWe8s_8jATfD_25g', name: 'Pinkfong Baby Shark - Kids\' Songs & Stories' }
-];
+// --- SECURITY: Client ID ---
+const GOOGLE_CLIENT_ID = '959694478718-pksctjg2pbmtd1fnvp9geha2imqbi72j.apps.googleusercontent.com';
 
-// Mock Data for Demo Mode (When no API Key is present)
+// Default Data Structure
+const DEFAULT_PROFILE_ID = 'default_child';
+const DEFAULT_DATA = {
+  profiles: [
+    {
+      id: DEFAULT_PROFILE_ID,
+      name: 'Default Child',
+      channels: [
+        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes' },
+        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs' },
+        { id: 'UXI_4T5eMWe8s_8jATfD_25g', name: 'Pinkfong Baby Shark - Kids\' Songs & Stories' }
+      ]
+    }
+  ],
+  currentProfileId: DEFAULT_PROFILE_ID,
+  apiKey: ''
+};
+
+// Mock Data for Demo Mode
 const MOCK_VIDEOS = [
   {
     id: 'WRVsOCh907o',
@@ -33,28 +48,14 @@ const MOCK_VIDEOS = [
     thumbnail: 'https://img.youtube.com/vi/_6HzoUcx3eo/maxresdefault.jpg',
     channelTitle: 'Super Simple Songs',
     publishedAt: new Date().toISOString()
-  },
-  {
-    id: '7otAJa3jui8',
-    title: 'Bath Song | CoComelon Nursery Rhymes & Kids Songs',
-    thumbnail: 'https://img.youtube.com/vi/7otAJa3jui8/maxresdefault.jpg',
-    channelTitle: 'Cocomelon - Nursery Rhymes',
-    publishedAt: new Date().toISOString()
-  },
-  {
-    id: 'V_-not4fA6U',
-    title: 'Walking In The Jungle | Super Simple Songs',
-    thumbnail: 'https://img.youtube.com/vi/V_-not4fA6U/maxresdefault.jpg',
-    channelTitle: 'Super Simple Songs',
-    publishedAt: new Date().toISOString()
-  },
+  }
 ];
 
 let state = {
-  apiKey: localStorage.getItem(STORAGE_KEY_API) || '',
-  channels: JSON.parse(localStorage.getItem(STORAGE_KEY_CHANNELS)) || DEFAULT_CHANNELS,
+  data: DEFAULT_DATA,
   videos: [],
-  player: null
+  tokenClient: null,
+  accessToken: null
 };
 
 // DOM Elements
@@ -67,16 +68,43 @@ const channelList = document.getElementById('channel-list');
 const apiStatus = document.getElementById('api-status');
 const channelSearchInput = document.getElementById('channel-search-input');
 const searchResultsDropdown = document.getElementById('search-results-dropdown');
+const loginBtn = document.getElementById('google-login-btn');
+
+// Profile Elements
+const profileSelector = document.getElementById('profile-selector');
+const headerProfileName = document.getElementById('header-profile-name');
+const newProfileNameInput = document.getElementById('new-profile-name');
+const addProfileBtn = document.getElementById('add-profile-btn');
+const profileListContainer = document.getElementById('profile-list-container');
+const profileDropdown = document.getElementById('profile-dropdown');
 
 // --- Initialization ---
 function init() {
+  loadLocalData();
+
+  // Initialize GSI
+  // Priority: 1. Code-embedded ID (GOOGLE_CLIENT_ID)
+  //           2. LocalStorage (legacy/manual entry)
+  // If user hasn't replaced the placeholder, we check LocalStorage.
+
+  if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE') {
+    initializeGSI(GOOGLE_CLIENT_ID);
+  } else {
+    const legacyId = localStorage.getItem('safetube_client_id');
+    if (legacyId) {
+      initializeGSI(legacyId);
+    } else {
+      console.warn('Google Client ID not set.');
+    }
+  }
+
+  updateProfileUI();
   renderChannelList();
 
-  if (!state.apiKey) {
-    // Show Mock Data initially for immediate "Wow" factor
+  if (!state.data.apiKey) {
     state.videos = MOCK_VIDEOS;
     renderVideos();
-    apiStatus.textContent = 'Demo Mode: Using sample videos. Add API Key for real content.';
+    apiStatus.textContent = 'Demo Mode: Add API Key for real content.';
     apiStatus.style.color = 'orange';
   } else {
     fetchAllVideos();
@@ -85,50 +113,181 @@ function init() {
   setupEventListeners();
 }
 
-// --- Video Fetching Logic ---
+function loadLocalData() {
+  const rawData = localStorage.getItem(STORAGE_KEY_DATA);
+
+  if (rawData) {
+    state.data = JSON.parse(rawData);
+  } else {
+    // Migration: Check if old format exists
+    const oldKey = localStorage.getItem('safetube_api_key');
+    const oldChannels = localStorage.getItem('safetube_channels');
+
+    if (oldKey || oldChannels) {
+      console.log('Migrating old data...');
+      state.data.apiKey = oldKey || '';
+      if (oldChannels) {
+        state.data.profiles[0].channels = JSON.parse(oldChannels);
+      }
+      saveLocalData();
+    }
+  }
+
+  // Ensure strict structure
+  if (!state.data.profiles) state.data = DEFAULT_DATA;
+}
+
+function saveLocalData() {
+  localStorage.setItem(STORAGE_KEY_DATA, JSON.stringify(state.data));
+  // Sync if logged in
+  if (state.accessToken) saveToDrive();
+}
+
+function getCurrentProfile() {
+  return state.data.profiles.find(p => p.id === state.data.currentProfileId) || state.data.profiles[0];
+}
+
+// --- GSI & Drive Sync ---
+function initializeGSI(clientId) {
+  if (!window.google) {
+    setTimeout(() => initializeGSI(clientId), 500);
+    return;
+  }
+
+  try {
+    state.tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: SCOPES,
+      callback: async (response) => {
+        if (response.error !== undefined) {
+          throw (response);
+        }
+        state.accessToken = response.access_token;
+        loginBtn.textContent = 'Syncing...';
+        await syncWithDrive();
+        loginBtn.textContent = 'Synced with Google';
+        loginBtn.disabled = true;
+      },
+    });
+    loginBtn.style.display = 'block';
+  } catch (e) {
+    console.error("GSI Init Error", e);
+  }
+}
+
+async function syncWithDrive() {
+  const fileId = await findConfigFile();
+  if (fileId) {
+    const driveConfig = await downloadConfigFile(fileId);
+    if (driveConfig) {
+      // Merge logic: Drive overwrites local mostly, but we keep structure validity
+      if (driveConfig.profiles && Array.isArray(driveConfig.profiles)) {
+        state.data = driveConfig;
+        saveLocalData(); // Save to local but don't re-trigger upload
+        updateProfileUI();
+        renderChannelList();
+        fetchAllVideos();
+        alert('Settings loaded from Google Drive!');
+      }
+    }
+  } else {
+    await saveToDrive();
+  }
+}
+
+async function saveToDrive() {
+  if (!state.accessToken) return;
+
+  const configData = {
+    ...state.data,
+    lastUpdated: new Date().toISOString()
+  };
+
+  const fileId = await findConfigFile();
+  const blob = new Blob([JSON.stringify(configData)], { type: 'application/json' });
+  const metadata = {
+    name: 'safetube_config.json',
+    mimeType: 'application/json',
+    parents: ['appDataFolder']
+  };
+
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', blob);
+
+  let url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+  let method = 'POST';
+
+  if (fileId) {
+    url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`;
+    method = 'PATCH';
+  }
+
+  await fetch(url, {
+    method: method,
+    headers: {
+      'Authorization': 'Bearer ' + state.accessToken
+    },
+    body: form
+  });
+  console.log('Saved to Drive');
+}
+
+async function findConfigFile() {
+  const q = "name = 'safetube_config.json' and 'appDataFolder' in parents and trashed = false";
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&spaces=appDataFolder`, {
+    headers: { 'Authorization': 'Bearer ' + state.accessToken }
+  });
+  const data = await res.json();
+  return data.files && data.files.length > 0 ? data.files[0].id : null;
+}
+
+async function downloadConfigFile(fileId) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+    headers: { 'Authorization': 'Bearer ' + state.accessToken }
+  });
+  return await res.json();
+}
+
+// --- Video Fetching ---
 async function fetchAllVideos() {
-  if (!state.apiKey) return;
+  if (!state.data.apiKey) return;
+  const profile = getCurrentProfile();
+
+  if (!profile.channels || profile.channels.length === 0) {
+    state.videos = [];
+    renderVideos();
+    apiStatus.textContent = 'No channels in this profile.';
+    return;
+  }
 
   videoContainer.innerHTML = `
     <div class="loading-state">
       <div class="spinner"></div>
-      <p>Updating your safe channel list...</p>
+      <p>Loading ${profile.name}'s videos...</p>
     </div>
   `;
 
-  let checkVideos = [];
-
   try {
-    // 1. Get Uploads Playlist ID for each channel
-    // We use search queries for simplicity in this V1, but ideally we'd use channel->contentDetails->relatedPlaylists->uploads
-    // For simplicity and "latest" validation, we'll iterate channels.
-
-    const promises = state.channels.map(channel => fetchChannelVideos(channel.id));
+    const promises = profile.channels.map(channel => fetchChannelVideos(channel.id));
     const results = await Promise.all(promises);
-
-    // Flatten and sort
-    checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+    const checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
     state.videos = checkVideos;
     renderVideos();
     apiStatus.textContent = 'Connected! Videos updated.';
-    apiStatus.style.color = '#4ecdc4'; // Teal
+    apiStatus.style.color = '#4ecdc4';
 
   } catch (error) {
     console.error('Error fetching videos:', error);
-    apiStatus.textContent = 'Error fetching videos. Check access or quota.';
+    apiStatus.textContent = 'Error fetching videos.';
     apiStatus.style.color = '#ff6b6b';
-    // Fallback to what we have or show error
     videoContainer.innerHTML = `<p style="text-align:center; padding: 2rem;">😕 Change API Key or check internet.</p>`;
   }
 }
 
 async function fetchChannelVideos(channelId) {
-  // Using 'search' endpoint: simple but costs 100 quota per call.
-  // Better: 'channels' -> uploads playlist ID -> 'playlistItems'. Cost: 1 + 1 = 2 quota.
-
-  // Method: Get Uploads Playlist ID
-  const channelUrl = `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${channelId}&key=${state.apiKey}`;
+  const channelUrl = `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${channelId}&key=${state.data.apiKey}`;
 
   try {
     const chRes = await fetch(channelUrl);
@@ -138,8 +297,7 @@ async function fetchChannelVideos(channelId) {
 
     const uploadsPlaylistId = chData.items[0].contentDetails.relatedPlaylists.uploads;
 
-    // Get Videos from Playlist
-    const plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=10&key=${state.apiKey}`;
+    const plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=10&key=${state.data.apiKey}`;
     const plRes = await fetch(plUrl);
     const plData = await plRes.json();
 
@@ -159,21 +317,18 @@ async function fetchChannelVideos(channelId) {
   }
 }
 
-// --- Channel Search Logic ---
+// --- Channel Search ---
 let searchDebounce;
 
 async function searchChannels(query) {
-  if (!state.apiKey) {
+  if (!state.data.apiKey) {
     alert('Please enter a valid API Key first.');
     return;
   }
-
-  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${encodeURIComponent(query)}&maxResults=5&key=${state.apiKey}`;
-
+  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${encodeURIComponent(query)}&maxResults=5&key=${state.data.apiKey}`;
   try {
     const res = await fetch(searchUrl);
     const data = await res.json();
-
     renderSearchResults(data.items || []);
   } catch (error) {
     console.error('Search error:', error);
@@ -186,15 +341,12 @@ function renderSearchResults(items) {
     searchResultsDropdown.classList.remove('hidden');
     return;
   }
-
   searchResultsDropdown.innerHTML = '';
   items.forEach(item => {
     const li = document.createElement('li');
     li.className = 'search-result-item';
     li.onclick = () => addChannelFromSearch(item);
-
     const thumb = item.snippet.thumbnails.default?.url;
-
     li.innerHTML = `
       <img src="${thumb}" class="search-avatar" />
       <div class="search-info">
@@ -202,55 +354,100 @@ function renderSearchResults(items) {
         <span class="search-sub">${item.snippet.description.substring(0, 30)}...</span>
       </div>
     `;
-
     searchResultsDropdown.appendChild(li);
   });
-
   searchResultsDropdown.classList.remove('hidden');
 }
 
 function addChannelFromSearch(item) {
+  const profile = getCurrentProfile();
   const newChannel = {
     id: item.snippet.channelId,
     name: item.snippet.channelTitle
   };
 
-  // Check if exists
-  if (state.channels.some(c => c.id === newChannel.id)) {
+  if (profile.channels.some(c => c.id === newChannel.id)) {
     alert('Channel already added!');
     return;
   }
 
-  state.channels.push(newChannel);
-  localStorage.setItem(STORAGE_KEY_CHANNELS, JSON.stringify(state.channels));
+  profile.channels.push(newChannel);
+  saveLocalData();
   renderChannelList();
 
-  // Clear search
   channelSearchInput.value = '';
   searchResultsDropdown.classList.add('hidden');
-
-  // Optionally update videos
   fetchAllVideos();
 }
 
 
 // --- Rendering ---
+function updateProfileUI() {
+  const profile = getCurrentProfile();
+  headerProfileName.textContent = profile.name;
+  profileSelector.classList.remove('hidden');
+
+  renderProfileList();
+  renderProfileDropdown();
+}
+
+function renderProfileDropdown() {
+  if (!profileDropdown) return;
+  profileDropdown.innerHTML = '';
+
+  state.data.profiles.forEach(p => {
+    const li = document.createElement('li');
+    li.className = 'profile-dropdown-item';
+    if (p.id === state.data.currentProfileId) li.classList.add('active');
+
+    li.textContent = p.name;
+    li.onclick = (e) => {
+      e.stopPropagation();
+      switchProfile(p.id);
+      profileDropdown.classList.add('hidden');
+    };
+    profileDropdown.appendChild(li);
+  });
+}
+
+function renderProfileList() {
+  if (!profileListContainer) return;
+  profileListContainer.innerHTML = '';
+
+  state.data.profiles.forEach(p => {
+    const div = document.createElement('div');
+    div.className = `profile-list-item ${p.id === state.data.currentProfileId ? 'active' : ''}`;
+
+    div.innerHTML = `
+            <span>${p.name} <small>(${p.channels.length} channels)</small></span>
+            <div class="profile-actions">
+                ${p.id === state.data.currentProfileId ? '<span style="font-size:0.8rem; color:green; display:flex; align-items:center;">Active</span>' : ''}
+                <button class="btn-small btn-edit" data-id="${p.id}">Edit</button>
+                ${state.data.profiles.length > 1 ? `<button class="btn-small btn-delete" data-id="${p.id}">Delete</button>` : ''}
+            </div>
+        `;
+    profileListContainer.appendChild(div);
+  });
+
+  // Attach listeners
+  profileListContainer.querySelectorAll('.btn-edit').forEach(btn => {
+    btn.onclick = () => editProfileName(btn.dataset.id);
+  });
+  profileListContainer.querySelectorAll('.btn-delete').forEach(btn => {
+    btn.onclick = () => deleteProfile(btn.dataset.id);
+  });
+}
+
 function renderVideos() {
   videoContainer.innerHTML = '';
-
   if (state.videos.length === 0) {
-    videoContainer.innerHTML = '<p style="text-align:center; width: 100%;">No videos found. Check channel settings.</p>';
+    videoContainer.innerHTML = '<p style="text-align:center; width: 100%;">No videos found. Check settings.</p>';
     return;
   }
-
   state.videos.forEach(video => {
-    // Filter Shorts if needed (simple heuristic: title/duration - duration not available in snippet easily without another call)
-    // We will render all for now.
-
     const card = document.createElement('div');
     card.className = 'video-card';
     card.onclick = () => openPlayer(video);
-
     card.innerHTML = `
       <div class="thumbnail-wrapper">
         <img src="${video.thumbnail}" alt="${video.title}" class="thumbnail-img" loading="lazy" />
@@ -264,14 +461,14 @@ function renderVideos() {
         </div>
       </div>
     `;
-
     videoContainer.appendChild(card);
   });
 }
 
 function renderChannelList() {
+  const profile = getCurrentProfile();
   channelList.innerHTML = '';
-  state.channels.forEach((channel, index) => {
+  profile.channels.forEach((channel, index) => {
     const li = document.createElement('li');
     li.className = 'channel-item';
     li.innerHTML = `
@@ -281,60 +478,107 @@ function renderChannelList() {
     channelList.appendChild(li);
   });
 
-  // Re-attach event listeners for remove buttons
   document.querySelectorAll('.remove-btn').forEach(btn => {
     btn.onclick = (e) => {
       const idx = e.target.getAttribute('data-index');
-      state.channels.splice(idx, 1);
-      localStorage.setItem(STORAGE_KEY_CHANNELS, JSON.stringify(state.channels));
+      profile.channels.splice(idx, 1);
+      saveLocalData();
       renderChannelList();
+      saveToDrive();
     };
   });
 }
 
 // --- Player Logic ---
 function openPlayer(video) {
-  // Use No-Cookie to avoid tracking? No, standard is better for Premium recognition content-wise.
-  // Standard embed URL.
   const embedUrl = `https://www.youtube.com/embed/${video.id}?autoplay=1&rel=0&modestbranding=1`;
-
   document.getElementById('youtube-player').innerHTML = `
-    <iframe 
-      width="100%" 
-      height="100%" 
-      src="${embedUrl}" 
-      title="YouTube video player" 
-      frameborder="0" 
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-      allowfullscreen
-    ></iframe>
+    <iframe width="100%" height="100%" src="${embedUrl}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
   `;
-
   document.getElementById('video-title').textContent = video.title;
   document.getElementById('video-channel').textContent = video.channelTitle;
-
   playerModal.classList.remove('hidden');
 }
 
 function closePlayer() {
   playerModal.classList.add('hidden');
-  document.getElementById('youtube-player').innerHTML = ''; // Stop video
+  document.getElementById('youtube-player').innerHTML = '';
+}
+
+// --- Profile Actions ---
+function addProfile(name) {
+  if (!name) return;
+  const newId = 'child_' + Date.now();
+  state.data.profiles.push({
+    id: newId,
+    name: name,
+    channels: []
+  });
+  saveLocalData();
+  updateProfileUI();
+  newProfileNameInput.value = '';
+}
+
+function switchProfile(id) {
+  state.data.currentProfileId = id;
+  saveLocalData();
+  updateProfileUI();
+  renderChannelList();
+  fetchAllVideos();
+}
+
+function editProfileName(id) {
+  const profile = state.data.profiles.find(p => p.id === id);
+  if (!profile) return;
+
+  const newName = prompt("Enter new name for " + profile.name, profile.name);
+  if (newName && newName.trim() !== "") {
+    profile.name = newName.trim();
+    saveLocalData();
+    updateProfileUI();
+    if (state.data.currentProfileId === id) {
+      headerProfileName.textContent = profile.name;
+    }
+  }
+}
+
+function deleteProfile(id) {
+  if (confirm('Are you sure you want to delete this profile?')) {
+    state.data.profiles = state.data.profiles.filter(p => p.id !== id);
+    // If deleted current, switch to first available
+    if (state.data.currentProfileId === id) {
+      state.data.currentProfileId = state.data.profiles[0].id; // There should always be at least one
+    }
+    saveLocalData();
+    updateProfileUI();
+    renderChannelList();
+    fetchAllVideos();
+  }
 }
 
 // --- Event Listeners ---
 function setupEventListeners() {
-  // Controls
   document.getElementById('refresh-btn').onclick = fetchAllVideos;
 
+  // Header Profile Switcher Dropdown Toggle
+  profileSelector.onclick = (e) => {
+    e.stopPropagation();
+    profileDropdown.classList.toggle('hidden');
+  };
+
+  // Close dropdown when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!profileDropdown.classList.contains('hidden') && !profileSelector.contains(e.target)) {
+      profileDropdown.classList.add('hidden');
+    }
+  });
+
   document.getElementById('settings-btn').onclick = () => {
-    // Parent Gate
     const a = Math.floor(Math.random() * 5) + 1;
     const b = Math.floor(Math.random() * 5) + 1;
     const sum = a + b;
     document.getElementById('gate-question').textContent = `What is ${a} + ${b}?`;
     document.getElementById('gate-answer').value = '';
-
-    // Store answer temporarily on the element
     gateModal.dataset.answer = sum;
     gateModal.classList.remove('hidden');
   };
@@ -342,19 +586,19 @@ function setupEventListeners() {
   document.getElementById('gate-submit').onclick = () => {
     const input = parseInt(document.getElementById('gate-answer').value);
     const correct = parseInt(gateModal.dataset.answer);
-
     if (input === correct) {
       gateModal.classList.add('hidden');
       settingsModal.classList.remove('hidden');
-      // Populate API key input if exists
-      apiKeyInput.value = state.apiKey;
+      // Refresh Lists just in case
+      renderChannelList();
+      updateProfileUI();
+      apiKeyInput.value = state.data.apiKey;
     } else {
       alert('Incorrect! Ask your parents.');
       gateModal.classList.add('hidden');
     }
   };
 
-  // Settings Modal
   document.getElementById('close-settings').onclick = () => {
     settingsModal.classList.add('hidden');
     searchResultsDropdown.classList.add('hidden');
@@ -363,41 +607,49 @@ function setupEventListeners() {
   document.getElementById('save-api-key').onclick = () => {
     const key = apiKeyInput.value.trim();
     if (key) {
-      state.apiKey = key;
-      localStorage.setItem(STORAGE_KEY_API, key);
+      state.data.apiKey = key;
+      saveLocalData();
       apiStatus.textContent = 'Key saved!';
-      // Try to fetch
       fetchAllVideos();
     }
   };
 
-  // Channel Search Input Listener
+  if (loginBtn) {
+    loginBtn.onclick = () => {
+      if (state.tokenClient) {
+        state.tokenClient.requestAccessToken();
+      } else {
+        // Should not happen if configured correctly in code
+        alert('OAuth Client ID not configured.');
+      }
+    };
+  }
+
+  // Profile Listeners
+  addProfileBtn.onclick = () => {
+    addProfile(newProfileNameInput.value.trim());
+  };
+
   channelSearchInput.addEventListener('input', (e) => {
     const query = e.target.value.trim();
-
     clearTimeout(searchDebounce);
-
     if (query.length < 3) {
       searchResultsDropdown.classList.add('hidden');
       return;
     }
-
     searchDebounce = setTimeout(() => {
       searchChannels(query);
-    }, 500); // 500ms debounce
+    }, 500);
   });
 
-  // Close search dropdown when clicking outside
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.search-wrapper')) {
       searchResultsDropdown.classList.add('hidden');
     }
   });
 
-  // Player
   document.getElementById('close-player').onclick = closePlayer;
 
-  // Keyboard Escape to close modals
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closePlayer();
