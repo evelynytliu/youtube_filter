@@ -51,11 +51,23 @@ async function saveToDrive() {
       },
       body: form
     });
-    if (!res.ok) throw new Error(res.statusText);
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errText}`);
+    }
     console.log('Saved to Drive (Visible File)');
+    alert('Cloud Save Success! Settings backed up.');
   } catch (e) {
     console.error('Save to Drive failed', e);
-    alert('Cloud Save Failed: ' + e.message);
+    // If permission error, suggest re-login
+    if (e.message.includes('401') || e.message.includes('403')) {
+      alert('Sync Error: Permission Denied. Please reload and login again to grant access.');
+      state.accessToken = null; // Clear token
+      loginBtn.textContent = 'Login with Google to Sync';
+      loginBtn.disabled = false;
+    } else {
+      alert('Cloud Save Failed: ' + e.message);
+    }
   }
 }
 
