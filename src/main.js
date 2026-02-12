@@ -551,7 +551,12 @@ function renderChannelNav() {
   // "All" Button
   const allBtn = document.createElement('div');
   allBtn.className = `nav-item ${state.activeChannelId === null ? 'active' : ''}`;
-  allBtn.innerHTML = `<span>All Videos</span>`;
+  // Use a colorful placeholder for "All"
+  const allIcon = `https://ui-avatars.com/api/?name=All&background=FF6B6B&color=fff&size=128&bold=true`;
+  allBtn.innerHTML = `
+        <img src="${allIcon}" class="nav-avatar" alt="All" />
+        <span>All Videos</span>
+    `;
   allBtn.onclick = () => filterVideos(null);
   channelNav.appendChild(allBtn);
 
@@ -560,13 +565,16 @@ function renderChannelNav() {
     const btn = document.createElement('div');
     btn.className = `nav-item ${state.activeChannelId === channel.id ? 'active' : ''}`;
 
-    // Add Avatar if exists
-    let avatarHtml = '';
-    if (channel.thumbnail) {
-      avatarHtml = `<img src="${channel.thumbnail}" class="nav-avatar" alt="" />`;
+    let avatarSrc = channel.thumbnail;
+    if (!avatarSrc) {
+      // Fallback avatar
+      avatarSrc = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128`;
     }
 
-    btn.innerHTML = `${avatarHtml}<span>${channel.name}</span>`;
+    btn.innerHTML = `
+            <img src="${avatarSrc}" class="nav-avatar" alt="${channel.name}" />
+            <span>${channel.name}</span>
+        `;
     btn.onclick = () => filterVideos(channel.id);
     channelNav.appendChild(btn);
   });
