@@ -21,6 +21,7 @@
       color: #333;
     }
   </style>
+  <link rel="stylesheet" href="./src/style.css">
 </head>
 
 <body>
@@ -54,9 +55,18 @@
     <div class="toolbar">
       <span id="video-count" class="video-count">0 videos</span>
       <div class="sort-controls">
-        <button class="sort-btn active" data-sort="newest" title="Newest First">📅 Newest</button>
-        <button class="sort-btn" data-sort="oldest" title="Oldest First">⏳ Oldest</button>
-        <button class="sort-btn" data-sort="shuffle" title="Shuffle Videos">🔀 Shuffle</button>
+        <button class="sort-btn active" data-sort="newest" title="Newest First">
+          <span class="sort-icon">📅</span>
+          <span class="sort-label">Newest</span>
+        </button>
+        <button class="sort-btn" data-sort="oldest" title="Oldest First">
+          <span class="sort-icon">⏳</span>
+          <span class="sort-label">Oldest</span>
+        </button>
+        <button class="sort-btn" data-sort="shuffle" title="Shuffle Videos">
+          <span class="sort-icon">🔀</span>
+          <span class="sort-label">Shuffle</span>
+        </button>
       </div>
     </div>
 

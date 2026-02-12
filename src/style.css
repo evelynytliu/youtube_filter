@@ -218,36 +218,76 @@ body {
   font-weight: 600;
 }
 
+
 .sort-controls {
   display: flex;
-  gap: 0.5rem;
+  gap: 0.8rem;
 }
 
 .sort-btn {
   background: white;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  border-radius: 8px;
-  padding: 0.4rem 0.8rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #555;
-  cursor: pointer;
-  transition: all 0.2s;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  /* Lighter border */
+  border-radius: 16px;
+  /* Squircle */
+  padding: 0.6rem 0.8rem;
+  min-width: 64px;
+
   display: flex;
+  flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 0.3rem;
+  /* Space between icon and text */
+
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+}
+
+.sort-icon {
+  font-size: 1.5rem;
+  /* Larger icon */
+  line-height: 1;
+  filter: grayscale(0.2);
+  /* Slightly muted by default */
+  transition: transform 0.2s;
+}
+
+.sort-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #666;
+  white-space: nowrap;
 }
 
 .sort-btn:hover {
-  background: #f8f9fa;
-  transform: translateY(-1px);
+  background: #fff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.15);
 }
 
+.sort-btn:hover .sort-icon {
+  transform: scale(1.1);
+  filter: grayscale(0);
+}
+
+/* Active State */
 .sort-btn.active {
   background: var(--dark-color);
-  color: white;
+  /* Kept dark theme for active sort */
   border-color: var(--dark-color);
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 12px rgba(45, 52, 54, 0.3);
+}
+
+.sort-btn.active .sort-label {
+  color: white;
+}
+
+.sort-btn.active .sort-icon {
+  filter: none;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 /* Video Grid */
