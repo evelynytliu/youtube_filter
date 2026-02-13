@@ -3,8 +3,10 @@
 // Configuration & State
 const STORAGE_KEY_API = 'safetube_api_key';
 const STORAGE_KEY_DATA = 'safetube_data';
+const STORAGE_KEY_STATS = 'safetube_stats_meta';
 // Change Scope to treat file as a normal visible file
 const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+const STATS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyryKTFoTom_fhoJ6ImvnfbYUn8wtKABPvMMLX_g3OP7yiBLj14m2kL0EDEOJVKDjtA6g/exec';
 
 // ...
 
@@ -115,7 +117,9 @@ const DEFAULT_DATA = {
     }
   ],
   currentProfileId: DEFAULT_PROFILE_ID,
-  apiKey: ''
+  apiKey: '',
+  shareStats: false, // New opt-in field
+  anonymousUserId: null // Generated upon opt-in
 };
 
 // Mock Data for Demo Mode
@@ -199,6 +203,8 @@ function init() {
   // Check if we need to force refreshing cache due to channel changes?
   // For now, let fetchAllVideos handle cache validation.
   fetchAllVideos();
+  checkAndUploadStats();
+
 
   setupEventListeners();
 }
@@ -931,6 +937,64 @@ function deleteProfile(id) {
   }
 }
 
+// --- Anonymous Stats Sharing ---
+async function checkAndUploadStats(force = false) {
+  if (!state.data.shareStats) return;
+
+  const lastUpload = localStorage.getItem(STORAGE_KEY_STATS);
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+
+  // Check if uploaded within last 24 hours
+  if (!force && lastUpload && (Date.now() - parseInt(lastUpload) < ONE_DAY)) {
+    console.log('Stats already uploaded today.');
+    return;
+  }
+
+  // Check if we have an anonymous ID (should exist if shareStats is true)
+  if (!state.data.anonymousUserId) {
+    state.data.anonymousUserId = crypto.randomUUID ? crypto.randomUUID() : 'user_' + Date.now();
+    saveLocalData();
+  }
+
+  console.log('Uploading anonymous stats...');
+
+  // Prepare Data: Aggregate ALL channels from ALL profiles
+  const allChannelsMap = new Map();
+  state.data.profiles.forEach(p => {
+    p.channels.forEach(c => {
+      if (!allChannelsMap.has(c.id)) {
+        allChannelsMap.set(c.id, { id: c.id, name: c.name });
+      }
+    });
+  });
+
+  const payload = {
+    userId: state.data.anonymousUserId,
+    channels: Array.from(allChannelsMap.values())
+  };
+
+  // Send to Google Script
+  try {
+    // Use no-cors mode because GAS returns a redirect which fetch logic handles weirdly in browser sometimes
+    // But for POST data, 'no-cors' is fine if we don't need the response content.
+    // However, GAS Web App requires following redirects usually.
+    // Let's try standard fetch first.
+
+    await fetch(STATS_ENDPOINT, {
+      method: 'POST',
+      mode: 'no-cors', // Important for GAS Web App to avoid CORS errors
+      // headers removed for no-cors
+      body: JSON.stringify(payload)
+    });
+
+    console.log('Stats uploaded successfully.');
+    localStorage.setItem(STORAGE_KEY_STATS, Date.now().toString());
+
+  } catch (e) {
+    console.warn('Failed to upload stats', e);
+  }
+}
+
 // --- Event Listeners ---
 function setupEventListeners() {
   document.getElementById('refresh-btn').onclick = fetchAllVideos;
@@ -973,6 +1037,11 @@ function setupEventListeners() {
       renderChannelList();
       updateProfileUI();
       apiKeyInput.value = state.data.apiKey;
+
+      // Load Stats Checkbox
+      const shareStatsCb = document.getElementById('share-stats-checkbox');
+      if (shareStatsCb) shareStatsCb.checked = !!state.data.shareStats;
+
     } else {
       alert('Incorrect! Ask your parents.');
       gateModal.classList.add('hidden');
@@ -982,6 +1051,22 @@ function setupEventListeners() {
   document.getElementById('close-settings').onclick = () => {
     settingsModal.classList.add('hidden');
     searchResultsDropdown.classList.add('hidden');
+  }
+
+  // Stats Toggle Listener
+  const shareStatsCb = document.getElementById('share-stats-checkbox');
+  if (shareStatsCb) {
+    shareStatsCb.onchange = (e) => {
+      state.data.shareStats = e.target.checked;
+      if (state.data.shareStats && !state.data.anonymousUserId) {
+        // Generate UUID
+        state.data.anonymousUserId = crypto.randomUUID ? crypto.randomUUID() : 'user_' + Date.now() + Math.random().toString(36).substr(2, 9);
+      }
+      saveLocalData();
+      if (state.data.shareStats) {
+        checkAndUploadStats(true); // Attempt upload immediately if opted in
+      }
+    };
   }
 
   document.getElementById('save-api-key').onclick = () => {
