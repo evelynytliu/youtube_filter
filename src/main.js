@@ -427,31 +427,26 @@ function startApp() {
   const spinner = document.querySelector('.loading-state');
   if (spinner) spinner.style.display = 'none';
 
-  if (appStarted) {
-    console.log('App already started, refreshing UI...');
-    updateProfileUI();
-    updateSyncUI();
-    return;
+  // One-time setup (event listeners, GSI, etc.)
+  if (!appStarted) {
+    console.log('Starting App (first time setup)...');
+    appStarted = true;
+
+    setupEventListeners();
+    setupDangerZoneListener();
+    setupSearch();
+
+    // Initialize GSI if not already active
+    const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
+      ? GOOGLE_CLIENT_ID
+      : localStorage.getItem('safetube_client_id');
+
+    if (clientId) initializeGSI(clientId);
   }
 
-  console.log('Starting App...');
-  appStarted = true;
-
+  // Always run: UI updates & video fetch
   updateProfileUI();
-  setupEventListeners();
-  setupDangerZoneListener(); // New Listener
-  setupSearch();
-
-  // Initialize GSI if not already active
-  const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
-    ? GOOGLE_CLIENT_ID
-    : localStorage.getItem('safetube_client_id');
-
-  if (clientId) initializeGSI(clientId);
-
-  // Initial Sync UI update
   updateSyncUI();
-
   fetchMissingChannelIcons();
   fetchAllVideos();
 }
