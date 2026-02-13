@@ -1811,3 +1811,31 @@ input[type="checkbox"] {
   color: #888;
   font-style: italic;
 }
+
+.wizard-btn-google {
+  background: white;
+  color: #444;
+  border: 1px solid #ddd;
+  padding: 12px;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  transition: background 0.2s;
+  margin-top: 15px;
+}
+
+.wizard-btn-google:hover {
+  background: #f1f3f4;
+  border-color: #ccc;
+}
+
+.wizard-btn-google svg {
+  width: 20px;
+  height: 20px;
+}
