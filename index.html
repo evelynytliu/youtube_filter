@@ -122,8 +122,17 @@
             <button id="save-client-id" class="secondary-btn">Save Client ID</button>
           </div>
 
+          <div id="google-user-info" class="user-info-display hidden"
+            style="display: none; align-items: center; gap: 10px; margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 8px;">
+            <img id="google-avatar" src="" alt="Avatar" style="width: 32px; height: 32px; border-radius: 50%;" />
+            <div style="display: flex; flex-direction: column;">
+              <span id="google-name" style="font-weight: 600; font-size: 0.95rem;"></span>
+              <span id="google-email" style="font-size: 0.8rem; color: #666;"></span>
+            </div>
+          </div>
+
           <button id="google-login-btn" class="primary-btn" style="display:none; margin-top: 10px; width: 100%;">
-            Login with Google
+            Login with Google to Sync
           </button>
         </section>
 

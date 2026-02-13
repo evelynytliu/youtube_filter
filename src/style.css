@@ -509,6 +509,48 @@ body {
   transform: scale(0.96);
 }
 
+/* Add Profile Form */
+.add-profile-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.add-profile-form input {
+  flex: 1;
+  padding: 0.8rem;
+  border-radius: 12px;
+  border: 1px solid #ddd;
+  outline: none;
+  font-size: 0.95rem;
+}
+
+.add-profile-form input:focus {
+  border-color: var(--primary-color);
+}
+
+.add-profile-form button {
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  font-size: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s, background 0.2s;
+  padding-bottom: 4px;
+  /* Align + visually */
+}
+
+.add-profile-form button:hover {
+  background: var(--primary-hover);
+  transform: scale(1.05);
+}
+
 input[type="text"],
 input[type="password"],
 input[type="number"] {

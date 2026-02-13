@@ -4,8 +4,8 @@
 const STORAGE_KEY_API = 'safetube_api_key';
 const STORAGE_KEY_DATA = 'safetube_data';
 const STORAGE_KEY_STATS = 'safetube_stats_meta';
-// Change Scope to treat file as a normal visible file
-const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+// Scopes: Drive access + User Info for display
+const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
 const STATS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyryKTFoTom_fhoJ6ImvnfbYUn8wtKABPvMMLX_g3OP7yiBLj14m2kL0EDEOJVKDjtA6g/exec';
 
 // ...
@@ -178,6 +178,38 @@ const videoCount = document.getElementById('video-count');
 const sortButtons = document.querySelectorAll('.sort-btn');
 
 // --- Initialization ---
+// --- Google User Info ---
+async function fetchGoogleUserInfo() {
+  if (!state.accessToken) return;
+  try {
+    const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { 'Authorization': 'Bearer ' + state.accessToken }
+    });
+    const userInfo = await res.json();
+
+    if (userInfo.name) {
+      const userCard = document.getElementById('google-user-info');
+      const avatar = document.getElementById('google-avatar');
+      const nameEl = document.getElementById('google-name');
+      const emailEl = document.getElementById('google-email');
+
+      if (userCard && avatar && nameEl) {
+        userCard.classList.remove('hidden');
+        userCard.style.display = 'flex'; // Ensure flex layout
+
+        nameEl.textContent = userInfo.name;
+        // Only show email if it's not super long or private, but userinfo.email is fine
+        if (emailEl && userInfo.email) emailEl.textContent = userInfo.email;
+
+        if (userInfo.picture) avatar.src = userInfo.picture;
+        else avatar.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(userInfo.name)}&background=random`;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to fetch Google User Info', e);
+  }
+}
+
 function init() {
   loadLocalData();
 
@@ -262,14 +294,18 @@ function initializeGSI(clientId) {
         state.accessToken = response.access_token;
         loginBtn.textContent = 'Syncing...';
         loginBtn.disabled = true; // Temporary disable while syncing
+
+        await fetchGoogleUserInfo().catch(console.warn); // Fetch and display user info
+
         await syncWithDrive();
-        loginBtn.textContent = '🔄 Re-sync from Google';
+
+        loginBtn.textContent = 'Sync Now (Re-sync)';
         loginBtn.disabled = false; // Re-enable for manual sync
         loginBtn.onclick = async () => {
           loginBtn.textContent = 'Syncing...';
           loginBtn.disabled = true;
           await syncWithDrive();
-          loginBtn.textContent = '🔄 Re-sync from Google';
+          loginBtn.textContent = 'Sync Now (Re-sync)';
           loginBtn.disabled = false;
         };
       },
@@ -277,7 +313,8 @@ function initializeGSI(clientId) {
     loginBtn.style.display = 'block';
     // If we already have a token (rare in this flow but possible), update UI
     if (state.accessToken) {
-      loginBtn.textContent = '🔄 Re-sync from Google';
+      fetchGoogleUserInfo();
+      loginBtn.textContent = 'Sync Now (Re-sync)';
     } else {
       loginBtn.textContent = 'Login with Google to Sync';
     }
@@ -807,31 +844,35 @@ function renderProfileList() {
 
     div.innerHTML = `
             <div class="profile-info-row" style="display:flex; align-items:center; width:100%; gap: 10px;">
-                <span class="drag-handle" style="cursor: grab; color: #ccc; font-size: 1.2rem;">⣿</span>
+                <span class="drag-handle" style="cursor: grab; color: #ccc; font-size: 1.2rem; padding: 5px;">⣿</span>
                 
-                <div style="flex:1; display:flex; flex-direction:column; justify-content:center;">
+                <div class="profile-click-area" style="flex:1; display:flex; flex-direction:column; justify-content:center; cursor: pointer;">
                     <span style="font-weight:600; font-size:1rem;">${p.name}</span>
                     <span style="font-size:0.8rem; color:#888;">${p.channels.length} channels</span>
                 </div>
 
-                <div class="profile-actions" style="margin-left: auto; display: flex; gap: 8px;">
+                <div class="profile-actions" style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
                     ${p.id === state.data.currentProfileId
-        ? '<span class="status-badge active" style="background:#e6fffa; color:#2c7a7b; padding:4px 8px; border-radius:12px; font-size:0.8rem;">Current</span>'
-        : `<button class="btn-icon btn-select" data-id="${p.id}" title="Switch to this profile">➡️</button>`
+        ? '<span class="status-badge active" style="background:#e6fffa; color:#2c7a7b; padding:4px 8px; border-radius:12px; font-size:0.75rem; font-weight:600;">Current</span>'
+        : ''
       }
                     <button class="btn-icon btn-edit" data-id="${p.id}" title="Rename">✏️</button>
                     ${state.data.profiles.length > 1 ? `<button class="btn-icon btn-delete" data-id="${p.id}" title="Delete">🗑️</button>` : ''}
                 </div>
             </div>
         `;
+
+    // Make the text area clickable to switch
+    const clickArea = div.querySelector('.profile-click-area');
+    if (clickArea && p.id !== state.data.currentProfileId) {
+      clickArea.onclick = () => switchProfile(p.id);
+      clickArea.title = "Click to switch";
+    }
+
     profileListContainer.appendChild(div);
   });
 
-  // Attach listeners (Switch/Edit/Delete)
-  // Note: Drag listeners are attached per element above
-  profileListContainer.querySelectorAll('.btn-select').forEach(btn => {
-    btn.onclick = (e) => { e.stopPropagation(); switchProfile(btn.dataset.id); };
-  });
+  // Attach listeners (Edit/Delete)
   profileListContainer.querySelectorAll('.btn-edit').forEach(btn => {
     btn.onclick = (e) => { e.stopPropagation(); editProfileName(btn.dataset.id); };
   });
