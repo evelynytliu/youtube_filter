@@ -262,15 +262,7 @@
               </p>
             </div>
 
-            <!-- Action Row -->
-            <div class="action-row">
-              <div style="flex:1"></div> <!-- Spacer -->
-              <button id="save-api-key" class="primary-btn" style="width: 100%;">
-                Save Settings
-              </button>
-            </div>
 
-            <div id="api-status" class="status-toast"></div>
           </section>
 
           <section class="settings-section">
@@ -308,6 +300,14 @@
             <p class="small-text" style="color: #c53030; opacity: 0.8;">This will delete all profiles and settings from
               this device. Cloud backup remains safe.</p>
           </section>
+        </div>
+
+        <!-- Sticky Save Footer -->
+        <div class="settings-sticky-footer">
+          <div id="api-status" class="status-toast"></div>
+          <button id="save-api-key" class="primary-btn settings-save-btn">
+            💾 Save Settings
+          </button>
         </div>
       </div>
     </div>

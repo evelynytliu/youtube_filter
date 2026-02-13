@@ -577,9 +577,11 @@ h1 {
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.12);
   padding: 0;
   position: relative;
-  /* Ensure children can position relative to this */
   border: none;
   max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
 }
 
 /* Modal Header */
@@ -650,11 +652,50 @@ h1 {
 /* Sections Container */
 .settings-body {
   padding: 24px 28px;
-  max-height: 70vh;
+  padding-bottom: 12px;
   overflow-y: auto;
+  flex: 1;
   background: #f8f9fa;
   /* Light background to make blocks pop */
+}
+
+/* Sticky Save Footer */
+.settings-sticky-footer {
+  padding: 12px 28px 20px;
+  background: #ffffff;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
   border-radius: 0 0 24px 24px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
+}
+
+.settings-save-btn {
+  width: 100%;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 14px 20px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--primary-color), #e05c5c);
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(255, 107, 107, 0.3);
+}
+
+.settings-save-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(255, 107, 107, 0.4);
+}
+
+.settings-save-btn:active {
+  transform: translateY(0);
+}
+
+.settings-sticky-footer .status-toast {
+  text-align: center;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
 }
 
 .settings-section {
@@ -1363,8 +1404,15 @@ input[type="checkbox"] {
   }
 
   .modal-content {
-    padding: 1rem;
     width: 95%;
+  }
+
+  .settings-body {
+    padding: 16px;
+  }
+
+  .settings-sticky-footer {
+    padding: 12px 16px 16px;
   }
 }
 
