@@ -951,19 +951,35 @@ async function fetchMissingChannelIcons() {
   missingIcons = profile.channels.filter(c => !c.thumbnail);
   if (missingIcons.length === 0) return;
 
-  // Option 2: Ranking API Fallback
+  // Option 2: Ranking API Fallback (Google Sheet)
   try {
-    console.log(`Fetching icons via Community Stats for ${missingIcons.length} channels...`);
+    console.log(`Fetching icons via Google Sheet (Rankings) for ${missingIcons.length} channels...`);
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
-    const response = await fetch(STATS_ENDPOINT + '?action=getRankings', { signal: controller.signal });
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for script
+
+    // Append timestamp to avoid caching
+    const response = await fetch(STATS_ENDPOINT + '?action=getRankings&t=' + Date.now(), { signal: controller.signal });
     clearTimeout(timeoutId);
+
     const data = await response.json();
     if (data.channels) {
       let updated = false;
       missingIcons.forEach(missing => {
-        const match = data.channels.find(rank => rank.id === missing.id);
+        // Try exact ID match first
+        let match = data.channels.find(rank => rank.id === missing.id);
+
+        // If not found, try exact name match
+        if (!match) {
+          match = data.channels.find(rank => rank.name === missing.name);
+        }
+
+        // If still not found, try fuzzy text match (for cases like "Super Simple Songs - Kids Songs")
+        if (!match) {
+          match = data.channels.find(rank => rank.name && (rank.name.includes(missing.name) || missing.name.includes(rank.name)));
+        }
+
         if (match && match.thumbnail) {
+          console.log(`Found icon for ${missing.name}: ${match.thumbnail}`);
           missing.thumbnail = match.thumbnail;
           updated = true;
         }
@@ -971,7 +987,7 @@ async function fetchMissingChannelIcons() {
       if (updated) finalizeIconUpdate();
     }
   } catch (e) {
-    console.warn('Community Stats icon fetch failed', e);
+    console.warn('Google Sheet icon fetch failed', e);
   }
 
   // Recheck what's still missing
