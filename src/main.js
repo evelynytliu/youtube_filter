@@ -2050,6 +2050,19 @@ async function showOnboardingWizard() {
   const step2 = modal.querySelector('#wizard-step-2');
   const googleContainer = modal.querySelector('#wizard-google-container');
 
+  // Pre-fetch channel data NOW (during Step 1, while user types name)
+  let prefetchedChannels = null;
+  const prefetchPromise = fetch(STATS_ENDPOINT + '?action=getRankings&t=' + Date.now())
+    .then(r => r.json())
+    .then(data => {
+      if (data.channels && data.channels.length > 0) {
+        prefetchedChannels = data.channels.slice(0, 16);
+        return prefetchedChannels;
+      }
+      return null;
+    })
+    .catch(e => { console.warn('Prefetch rankings failed:', e); return null; });
+
   nameInput.oninput = () => {
     nextBtn.disabled = nameInput.value.trim().length === 0;
   };
@@ -2070,8 +2083,8 @@ async function showOnboardingWizard() {
     step1.style.display = 'none';
     step2.style.display = 'block';
 
-    // Fetch Recommendations
-    await loadWizardRecommendations(modal);
+    // Use pre-fetched data if available
+    await loadWizardRecommendations(modal, prefetchedChannels, prefetchPromise);
   };
 
   // Google Login Logic (Directly Visible)
@@ -2189,27 +2202,21 @@ const CURATED_CHANNELS = [
   { id: 'UC_qs3c0ehDvZkbiEbOj6Drg', name: 'LooLoo Kids' }
 ];
 
-async function loadWizardRecommendations(modal) {
+async function loadWizardRecommendations(modal, prefetchedChannels, prefetchPromise) {
   const grid = modal.querySelector('#wizard-channel-grid');
   const loader = modal.querySelector('#channel-loading');
 
-  // Helper to render card
+  // Helper to render a single channel card
   const renderCard = (channel) => {
-    // Avoid duplicates
-    if (grid.querySelector(`[data-id="${channel.id}"]`)) return;
+    if (grid.querySelector(`[data-id="${channel.id}"]`)) return; // Avoid duplicates
 
     const card = document.createElement('div');
-    card.className = 'channel-option-card'; // Default unselected
+    card.className = 'channel-option-card';
     card.dataset.id = channel.id;
     card.dataset.name = channel.name;
     card.dataset.thumb = channel.thumbnail || '';
 
-    // Use provided thumb or fallback
-    let thumbSrc = channel.thumbnail;
-    if (!thumbSrc) {
-      // Fallback to UI Avatar which is instant
-      thumbSrc = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128&rounded=true`;
-    }
+    const thumbSrc = channel.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128&rounded=true`;
     const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}`;
 
     card.innerHTML = `
@@ -2218,51 +2225,56 @@ async function loadWizardRecommendations(modal) {
           <div class="channel-option-label">${channel.name}</div>
        `;
 
-    card.onclick = () => {
-      card.classList.toggle('selected');
-    };
-
+    card.onclick = () => card.classList.toggle('selected');
     grid.appendChild(card);
   };
 
-  // 1. Render Curated List IMMEDIATELY (Instant UX)
-  if (grid) {
+  // Helper to render a full channel list (replaces existing grid)
+  const renderAll = (channels) => {
     grid.innerHTML = '';
-    CURATED_CHANNELS.forEach(renderCard);
+    channels.forEach(renderCard);
+    if (loader) loader.style.display = 'none';
+  };
+
+  // Strategy 1: Pre-fetched data already available (fast path - real icons!)
+  if (prefetchedChannels && prefetchedChannels.length > 0) {
+    console.log('Using pre-fetched channel data (instant with real icons)');
+    renderAll(prefetchedChannels);
+    return;
   }
 
-  // Show distinct status for background loading
+  // Strategy 2: Show curated fallback instantly, then try to get real data
+  grid.innerHTML = '';
+  CURATED_CHANNELS.forEach(renderCard);
+
   if (loader) {
-    loader.style.fontSize = '0.8rem';
-    loader.innerHTML = '✨ ' + (t('loading_recommendations') || 'Loading more...');
+    loader.style.fontSize = '0.75rem';
+    loader.innerHTML = '⏳ Loading real channel icons...';
   }
 
   try {
-    // 2. Background Fetch for Rankings & Real Thumbnails
+    // Wait for the in-flight prefetch if it exists
+    if (prefetchPromise) {
+      const resolved = await prefetchPromise;
+      if (resolved && resolved.length > 0) {
+        renderAll(resolved);
+        return;
+      }
+    }
+
+    // Strategy 3: Direct fetch as last resort
     const response = await fetch(STATS_ENDPOINT + '?action=getRankings&t=' + Date.now());
     const data = await response.json();
 
-    if (loader) loader.style.display = 'none';
-
     if (data.channels && data.channels.length > 0) {
-      data.channels.slice(0, 16).forEach(remoteChannel => {
-        const existing = grid.querySelector(`[data-id="${remoteChannel.id}"]`);
-        if (existing) {
-          // Enhance existing thumbnail if available
-          if (remoteChannel.thumbnail) {
-            const img = existing.querySelector('img');
-            if (img) img.src = remoteChannel.thumbnail;
-            existing.dataset.thumb = remoteChannel.thumbnail;
-          }
-        } else {
-          // Add new recommendation
-          renderCard(remoteChannel);
-        }
-      });
+      renderAll(data.channels.slice(0, 16));
+    } else {
+      if (loader) loader.style.display = 'none';
     }
   } catch (e) {
-    console.warn("Failed to load dynamic rankings", e);
+    console.warn('Failed to load dynamic rankings:', e);
     if (loader) loader.style.display = 'none';
+    // Curated fallback is already visible - that's fine
   }
 }
 
