@@ -439,6 +439,7 @@ function startApp() {
 
   updateProfileUI();
   setupEventListeners();
+  setupDangerZoneListener(); // New Listener
   setupSearch();
 
   // Initialize GSI if not already active
@@ -2020,8 +2021,13 @@ async function showOnboardingWizard() {
 
         <button class="wizard-btn-primary" id="wizard-next-btn" disabled>${t('next_step') || 'Next'}</button>
         
-        <div class="wizard-link-restore" id="wizard-restore-btn">${t('restore_backup')}</div>
-        <div id="wizard-google-btn" style="display:none; justify-content:center; margin-top:15px;"></div>
+        <div style="display:flex; align-items:center; margin: 20px 0; color:#ccc; font-size:0.8rem; font-weight:600;">
+            <div style="flex:1; height:1px; background:#eee;"></div>
+            <span style="padding:0 10px;">OR</span>
+            <div style="flex:1; height:1px; background:#eee;"></div>
+        </div>
+
+        <div id="wizard-google-container"></div>
       </div>
 
       <div class="wizard-step" id="wizard-step-2" style="display:none;">
@@ -2040,10 +2046,9 @@ async function showOnboardingWizard() {
   // Step 1 Logic
   const nameInput = modal.querySelector('#wizard-child-name');
   const nextBtn = modal.querySelector('#wizard-next-btn');
-  const restoreBtn = modal.querySelector('#wizard-restore-btn');
-  const googleBtnDiv = modal.querySelector('#wizard-google-btn');
   const step1 = modal.querySelector('#wizard-step-1');
   const step2 = modal.querySelector('#wizard-step-2');
+  const googleContainer = modal.querySelector('#wizard-google-container');
 
   nameInput.oninput = () => {
     nextBtn.disabled = nameInput.value.trim().length === 0;
@@ -2069,55 +2074,40 @@ async function showOnboardingWizard() {
     await loadWizardRecommendations(modal);
   };
 
-  // Restore Logic
-  restoreBtn.onclick = () => {
-    restoreBtn.style.display = 'none';
-    googleBtnDiv.style.display = 'flex';
+  // Google Login Logic (Directly Visible)
+  const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
+    ? GOOGLE_CLIENT_ID
+    : localStorage.getItem('safetube_client_id');
 
-    // Initialize GSI locally for this modal
-    const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
-      ? GOOGLE_CLIENT_ID
-      : localStorage.getItem('safetube_client_id');
+  if (clientId) {
+    initializeGSI(clientId);
 
-    if (clientId) {
-      // Ensure client is initialized
-      initializeGSI(clientId);
+    googleContainer.innerHTML = `
+        <button class="wizard-btn-google">
+           <svg viewBox="0 0 24 24" width="24" height="24" xmlns="http://www.w3.org/2000/svg">
+             <g transform="matrix(1, 0, 0, 1, 27.009001, -39.238998)">
+               <path fill="#4285F4" d="M -3.264 51.509 C -3.264 50.719 -3.334 49.969 -3.454 49.239 L -14.754 49.239 L -14.754 53.749 L -8.284 53.749 C -8.574 55.229 -9.424 56.479 -10.684 57.329 L -10.684 60.329 L -6.824 60.329 C -4.564 58.239 -3.264 55.159 -3.264 51.509 Z"/>
+               <path fill="#34A853" d="M -14.754 63.239 C -11.514 63.239 -8.804 62.159 -6.824 60.329 L -10.684 57.329 C -11.764 58.049 -13.134 58.489 -14.754 58.489 C -17.884 58.489 -20.534 56.379 -21.484 53.529 L -25.464 53.529 L -25.464 56.619 C -23.494 60.539 -19.464 63.239 -14.754 63.239 Z"/>
+               <path fill="#FBBC05" d="M -21.484 53.529 C -21.734 52.809 -21.864 52.039 -21.864 51.239 C -21.864 50.439 -21.734 49.669 -21.484 48.949 L -21.484 45.859 L -25.464 45.859 C -26.284 47.479 -26.754 49.299 -26.754 51.239 C -26.754 53.179 -26.284 54.999 -25.464 56.619 L -21.484 53.529 Z"/>
+               <path fill="#EA4335" d="M -14.754 43.989 C -12.984 43.989 -11.404 44.599 -10.154 45.789 L -6.734 42.369 C -8.804 40.429 -11.514 39.239 -14.754 39.239 C -19.464 39.239 -23.494 41.939 -25.464 45.859 L -21.484 48.949 C -20.534 46.099 -17.884 43.989 -14.754 43.989 Z"/>
+             </g>
+           </svg>
+           ${t('restore_backup')}
+        </button>
+      `;
 
-      // Render Custom Button
-      googleBtnDiv.innerHTML = `
-            <button class="wizard-btn-google">
-               <svg viewBox="0 0 24 24" width="24" height="24" xmlns="http://www.w3.org/2000/svg">
-                 <g transform="matrix(1, 0, 0, 1, 27.009001, -39.238998)">
-                   <path fill="#4285F4" d="M -3.264 51.509 C -3.264 50.719 -3.334 49.969 -3.454 49.239 L -14.754 49.239 L -14.754 53.749 L -8.284 53.749 C -8.574 55.229 -9.424 56.479 -10.684 57.329 L -10.684 60.329 L -6.824 60.329 C -4.564 58.239 -3.264 55.159 -3.264 51.509 Z"/>
-                   <path fill="#34A853" d="M -14.754 63.239 C -11.514 63.239 -8.804 62.159 -6.824 60.329 L -10.684 57.329 C -11.764 58.049 -13.134 58.489 -14.754 58.489 C -17.884 58.489 -20.534 56.379 -21.484 53.529 L -25.464 53.529 L -25.464 56.619 C -23.494 60.539 -19.464 63.239 -14.754 63.239 Z"/>
-                   <path fill="#FBBC05" d="M -21.484 53.529 C -21.734 52.809 -21.864 52.039 -21.864 51.239 C -21.864 50.439 -21.734 49.669 -21.484 48.949 L -21.484 45.859 L -25.464 45.859 C -26.284 47.479 -26.754 49.299 -26.754 51.239 C -26.754 53.179 -26.284 54.999 -25.464 56.619 L -21.484 53.529 Z"/>
-                   <path fill="#EA4335" d="M -14.754 43.989 C -12.984 43.989 -11.404 44.599 -10.154 45.789 L -6.734 42.369 C -8.804 40.429 -11.514 39.239 -14.754 39.239 C -19.464 39.239 -23.494 41.939 -25.464 45.859 L -21.484 48.949 C -20.534 46.099 -17.884 43.989 -14.754 43.989 Z"/>
-                 </g>
-               </svg>
-               ${t('login_google')}
-            </button>
-          `;
-
-      // Bind click
-      const btn = googleBtnDiv.querySelector('button');
-      btn.onclick = () => {
-        // Show syncing state immediately on button
-        btn.innerHTML = t('syncing');
-        btn.disabled = true;
-
-        if (state.tokenClient) {
-          state.tokenClient.requestAccessToken({ prompt: 'consent' });
-        } else {
-          alert("Google Sign-In not ready. Please try again in 2 seconds.");
-          // Maybe retry init?
-          initializeGSI(clientId);
-        }
-      };
-
-    } else {
-      alert("Google Client ID not configured.");
-    }
-  };
+    const btn = googleContainer.querySelector('button');
+    btn.onclick = () => {
+      btn.innerHTML = `${t('syncing')}`;
+      btn.disabled = true;
+      if (state.tokenClient) {
+        state.tokenClient.requestAccessToken({ prompt: 'consent' });
+      } else {
+        initializeGSI(clientId); // retry
+        setTimeout(() => { if (state.tokenClient) state.tokenClient.requestAccessToken({ prompt: 'consent' }); }, 500);
+      }
+    };
+  }
 
   // Step 2 Logic: Finish
   const finishBtn = modal.querySelector('#wizard-finish-btn');
@@ -2140,28 +2130,47 @@ async function showOnboardingWizard() {
     // 3. Close Modal & Init App
     modal.remove();
 
-    // Re-init normal flow
-    // We need to re-run parts of init that were skipped
-    updateProfileUI(); // Show new name
-    setupEventListeners();
-    setupSearch();
-
-    // Initialize GSI if not already
-    if (!state.accessToken) initializeGSI(CLIENT_ID);
-
-    fetchAllVideos(true);
-    fetchMissingChannelIcons();
+    startApp();
 
     // Show Login Tooltip
     setTimeout(() => {
       const tooltip = document.getElementById('onboarding-tooltip');
       if (tooltip) {
-        const textEl = tooltip.querySelector('span');
+        const textEl = tooltip.querySelector('p');
         if (textEl) textEl.textContent = t('onboarding_login_tooltip');
         tooltip.classList.add('show');
       }
     }, 1000);
   };
+}
+
+// Helper: Danger Zone Listener
+function setupDangerZoneListener() {
+  const resetBtn = document.getElementById('reset-app-btn');
+  if (resetBtn) {
+    resetBtn.onclick = () => {
+      // Hardcoded confirmation messages as they are critical
+      if (confirm('⚠️ WARNING: This will delete ALL data on this device.\n\nAre you sure you want to reset everything?')) {
+        if (confirm('This action cannot be undone. \n(Note: Your cloud backup will NOT be deleted.)\n\nProceed with reset?')) {
+          // Clear Local Data
+          localStorage.removeItem(STORAGE_KEY_DATA);
+          localStorage.removeItem('safetube_client_id');
+          localStorage.removeItem('safetube_onboarding_dismissed');
+          localStorage.removeItem('onboarding_dismissed');
+
+          // Google Token Logout
+          if (state.accessToken) {
+            try {
+              if (window.google) google.accounts.oauth2.revoke(state.accessToken, () => { });
+            } catch (e) { }
+          }
+
+          // Reload
+          location.reload();
+        }
+      }
+    };
+  }
 }
 
 async function loadWizardRecommendations(modal) {
