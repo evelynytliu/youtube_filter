@@ -2168,59 +2168,101 @@ function setupDangerZoneListener() {
           // Reload
           location.reload();
         }
-      }
-    };
+      };
+    }
   }
 }
+
+// Top channels for instant rendering (avoid GAS cold start delay)
+const CURATED_CHANNELS = [
+  { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon' },
+  { id: 'UCLsooMJoIpl_7ux2jvdPB-Q', name: 'Super Simple Songs' },
+  { id: 'UCcdwLMPsaU2ezNSJU1nFoBQ', name: 'Pinkfong Baby Shark' },
+  { id: 'UCCDiULnPSl1g3K_sO4fG-6Q', name: 'Little Baby Bum' },
+  { id: 'UC41aFAI9F3caYzKA6KzKBSQ', name: 'ChuChu TV' },
+  { id: 'UCpVo_w0p3lLY5NN8u7y768A', name: 'Sesame Street' },
+  { id: 'UCXMVaxrax7RNDPdfRrXXgtQ', name: 'PBS Kids' },
+  { id: 'UC513PdAP2-jWkJunTh5kXRw', name: 'Blippi' },
+  { id: 'UC2pmfLm7iq6Ov1Uw7W4IPZA', name: 'Masha and the Bear' },
+  { id: 'UCAOtE1V7Ots4DjM8JLlrYgg', name: 'Peppa Pig' },
+  { id: 'UCPlwvN0w4qFSP1FllALB92w', name: 'BabyBus' },
+  { id: 'UC_qs3c0ehDvZkbiEbOj6Drg', name: 'LooLoo Kids' }
+];
 
 async function loadWizardRecommendations(modal) {
   const grid = modal.querySelector('#wizard-channel-grid');
   const loader = modal.querySelector('#channel-loading');
 
+  // Helper to render card
+  const renderCard = (channel) => {
+    // Avoid duplicates
+    if (grid.querySelector(`[data-id="${channel.id}"]`)) return;
+
+    const card = document.createElement('div');
+    card.className = 'channel-option-card'; // Default unselected
+    card.dataset.id = channel.id;
+    card.dataset.name = channel.name;
+    card.dataset.thumb = channel.thumbnail || '';
+
+    // Use provided thumb or fallback
+    let thumbSrc = channel.thumbnail;
+    if (!thumbSrc) {
+      // Fallback to UI Avatar which is instant
+      thumbSrc = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128&rounded=true`;
+    }
+    const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}`;
+
+    card.innerHTML = `
+          <img src="${thumbSrc}" class="channel-option-img" onerror="this.src='${fallback}'" loading="lazy"/>
+          <span class="channel-check-badge">✔</span>
+          <div class="channel-option-label">${channel.name}</div>
+       `;
+
+    card.onclick = () => {
+      card.classList.toggle('selected');
+    };
+
+    grid.appendChild(card);
+  };
+
+  // 1. Render Curated List IMMEDIATELY (Instant UX)
+  if (grid) {
+    grid.innerHTML = '';
+    CURATED_CHANNELS.forEach(renderCard);
+  }
+
+  // Show distinct status for background loading
+  if (loader) {
+    loader.style.fontSize = '0.8rem';
+    loader.innerHTML = '✨ ' + (t('loading_recommendations') || 'Loading more...');
+  }
+
   try {
-    // Fetch Top Rankings + Default Recommendations
-    // We'll trust the ranking API to give us good stuff.
+    // 2. Background Fetch for Rankings & Real Thumbnails
     const response = await fetch(STATS_ENDPOINT + '?action=getRankings&t=' + Date.now());
     const data = await response.json();
 
     if (loader) loader.style.display = 'none';
 
     if (data.channels && data.channels.length > 0) {
-      // Filter duplicates if any
-      // Shuffle/Randomize slightly? Or just top. Top is safer.
-      const unique = data.channels.slice(0, 16); // Show top 16
-
-      unique.forEach(channel => {
-        const card = document.createElement('div');
-        card.className = 'channel-option-card'; // Default unselected
-        card.dataset.id = channel.id;
-        card.dataset.name = channel.name;
-        card.dataset.thumb = channel.thumbnail || '';
-
-        // Use UI Avatar fallback if thumbnail missing
-        const thumbSrc = channel.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128`;
-
-        const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}`;
-
-        card.innerHTML = `
-                  <img src="${thumbSrc}" class="channel-option-img" onerror="this.src='${fallback}'"/>
-                  <span class="channel-check-badge">✔</span>
-                  <div class="channel-option-label">${channel.name}</div>
-               `;
-
-        // Toggle Selection
-        card.onclick = () => {
-          card.classList.toggle('selected');
-        };
-
-        grid.appendChild(card);
+      data.channels.slice(0, 16).forEach(remoteChannel => {
+        const existing = grid.querySelector(`[data-id="${remoteChannel.id}"]`);
+        if (existing) {
+          // Enhance existing thumbnail if available
+          if (remoteChannel.thumbnail) {
+            const img = existing.querySelector('img');
+            if (img) img.src = remoteChannel.thumbnail;
+            existing.dataset.thumb = remoteChannel.thumbnail;
+          }
+        } else {
+          // Add new recommendation
+          renderCard(remoteChannel);
+        }
       });
-    } else {
-      if (grid) grid.innerHTML = '<p style="text-align:center; width:100%;">No recommendations available offline.</p>';
     }
   } catch (e) {
-    console.error(e);
-    if (loader) loader.textContent = "Could not load recommendations. Please check internet.";
+    console.warn("Failed to load dynamic rankings", e);
+    if (loader) loader.style.display = 'none';
   }
 }
 
