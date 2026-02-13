@@ -66,7 +66,8 @@ export const translations = {
     current_badge: { en: "Current", zh: "目前" },
     remove_channel: { en: "Remove Channel", zh: "移除頻道" },
     onboarding_title: { en: "👋 Welcome to SafeTube Kids!", zh: "👋 歡迎使用 SafeTube Kids！" },
-    onboarding_text: { en: "Tap the ⚙️ settings icon to set up your child's name and add their favourite channels.", zh: "點擊 ⚙️ 設定圖示來設定孩子的名字和新增喜愛的頻道。" },
+    onboarding_text: { en: "Tap ⚙️ Settings to set up your child's name and channels. Add a free YouTube API Key to unlock search, unlimited history, and faster sync!", zh: "點擊 ⚙️ 設定來設定孩子的名字和頻道。輸入免費的 YouTube API 金鑰可解鎖搜尋、無限歷史紀錄和更快的同步速度！" },
     onboarding_btn: { en: "Go to Settings", zh: "前往設定" },
-    onboarding_dismiss: { en: "Got it!", zh: "知道了！" }
+    onboarding_dismiss: { en: "Got it!", zh: "知道了！" },
+    status_demo_mode: { en: "Demo mode – add an API Key for full access.", zh: "展示模式 – 新增 API 金鑰以取得完整功能。" }
 };

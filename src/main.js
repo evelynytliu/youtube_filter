@@ -173,7 +173,7 @@ let state = {
   videos: [],
   tokenClient: null,
   accessToken: null,
-  lang: localStorage.getItem(STORAGE_KEY_LANG) || 'en'
+  lang: localStorage.getItem(STORAGE_KEY_LANG) || (navigator.language?.startsWith('zh') ? 'zh' : 'en')
 };
 
 // --- i18n Logic ---
@@ -623,8 +623,16 @@ async function fetchAllVideos(forceRefresh = false) {
       const results = await Promise.all(promises);
       checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
-      apiStatus.textContent = t('status_lite_mode');
-      apiStatus.style.color = '#FFA500'; // Warning Orange
+      // If RSS returned nothing (all proxies failed), show demo videos
+      if (checkVideos.length === 0) {
+        console.warn('RSS returned no videos, falling back to demo content');
+        checkVideos = MOCK_VIDEOS;
+        apiStatus.textContent = t('status_demo_mode');
+        apiStatus.style.color = '#FFA500';
+      } else {
+        apiStatus.textContent = t('status_lite_mode');
+        apiStatus.style.color = '#FFA500'; // Warning Orange
+      }
 
     } else {
       // --- API Mode ---
@@ -689,25 +697,29 @@ async function fetchChannelRSS(channel) {
   // Public YouTube RSS Feed URL
   const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.id}`;
 
-  // CORS Proxies (primary + fallback)
-  const proxyUrls = [
-    `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`,
-    `https://corsproxy.io/?url=${encodeURIComponent(rssUrl)}`
+  // CORS Proxies (primary + fallbacks) with timeout
+  const proxyConfigs = [
+    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`, type: 'json' },
+    { url: `https://corsproxy.io/?url=${encodeURIComponent(rssUrl)}`, type: 'text' },
+    { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(rssUrl)}`, type: 'text' }
   ];
 
-  for (const proxyUrl of proxyUrls) {
+  for (const proxy of proxyConfigs) {
     try {
-      const isAllOrigins = proxyUrl.includes('allorigins');
-      const res = await fetch(proxyUrl);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+      const res = await fetch(proxy.url, { signal: controller.signal });
+      clearTimeout(timeoutId);
 
       let xmlText;
-      if (isAllOrigins) {
+      if (proxy.type === 'json') {
         const data = await res.json();
         if (!data.contents) continue;
         xmlText = data.contents;
       } else {
         xmlText = await res.text();
-        if (!xmlText || xmlText.includes('error')) continue;
+        if (!xmlText || !xmlText.includes('<feed')) continue; // Must look like XML
       }
 
       // Parse XML
