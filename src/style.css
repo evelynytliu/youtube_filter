@@ -576,11 +576,10 @@ h1 {
   border-radius: 24px;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.12);
   padding: 0;
-  overflow: hidden;
-  /* For header image or color */
+  position: relative;
+  /* Ensure children can position relative to this */
   border: none;
   max-width: 600px;
-  /* Optimal width for app-like feel */
 }
 
 /* Modal Header */
@@ -591,6 +590,8 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  border-radius: 24px 24px 0 0;
+  /* Match modal corners */
 }
 
 .modal-content h2 {
@@ -626,7 +627,7 @@ h1 {
   color: #666;
   border: 1px solid #eee;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  z-index: 100;
+  z-index: 9999;
   cursor: pointer;
 }
 
@@ -653,6 +654,7 @@ h1 {
   overflow-y: auto;
   background: #f8f9fa;
   /* Light background to make blocks pop */
+  border-radius: 0 0 24px 24px;
 }
 
 .settings-section {
