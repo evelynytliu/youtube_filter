@@ -58,17 +58,29 @@ async function saveToDrive() {
       throw new Error(`HTTP ${res.status}: ${errText}`);
     }
     console.log('Saved to Drive (Visible File)');
-    alert('Cloud Save Success! Settings backed up.');
+    // alert('Cloud Save Success! Settings backed up.'); // Removed to prevent double alerts/annoyance
+
+    // Optional: Update a status indicator if visible
+    const apiStatus = document.getElementById('api-status');
+    if (apiStatus && apiStatus.classList.contains('show')) {
+      // Append cloud icon to existing toast if it's showing
+      apiStatus.textContent += ' (☁️ Synced)';
+    }
+
   } catch (e) {
     console.error('Save to Drive failed', e);
     // If permission error, suggest re-login
     if (e.message.includes('401') || e.message.includes('403')) {
-      alert('Sync Error: Permission Denied. Please reload and login again to grant access.');
-      state.accessToken = null; // Clear token
-      loginBtn.textContent = 'Login with Google to Sync';
-      loginBtn.disabled = false;
+      console.warn('Sync Error: Permission Denied. Token likely expired.');
+      // Don't alert on auto-save, just log. 
+      // Only reset if we are sure? Let's just invalidate for now.
+      state.accessToken = null;
+      if (typeof loginBtn !== 'undefined' && loginBtn) {
+        loginBtn.textContent = 'Login with Google to Sync';
+        loginBtn.disabled = false;
+      }
     } else {
-      alert('Cloud Save Failed: ' + e.message);
+      console.warn('Cloud Save Failed: ' + e.message);
     }
   }
 }
@@ -102,6 +114,9 @@ async function downloadConfigFile(fileId) {
 // Old implementations removed. Using the new ones at the top.
 const GOOGLE_CLIENT_ID = '959694478718-pksctjg2pbmtd1fnvp9geha2imqbi72j.apps.googleusercontent.com';
 
+// Avatars
+const AVATARS = ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🦄', '🦖', '🐙', '🦋', '🚀', '🎈', '⭐', '⚽', '🎮', '🎨'];
+
 // Default Data Structure
 const DEFAULT_PROFILE_ID = 'default_child';
 const DEFAULT_DATA = {
@@ -110,17 +125,20 @@ const DEFAULT_DATA = {
       id: DEFAULT_PROFILE_ID,
       name: 'Default Child',
       channels: [
-        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLRbdv3Di8paQyrgMF_VwFXPkhwVzcW59Vgo8dTsyw=s88-c-k-c0x00ffffff-no-rj' },
-        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLSGzJceA7O2jO7C7HHaQv5y5U-y7Sg_rQe6kX5G=s88-c-k-c0x00ffffff-no-rj' },
-        { id: 'UXI_4T5eMWe8s_8jATfD_25g', name: 'Pinkfong Baby Shark - Kids\' Songs & Stories', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLTkv3M_k-hSj5uV8t3y6jF_5_k_j5_k_j5_k=s88-c-k-c0x00ffffff-no-rj' }
+        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes', thumbnail: '' },
+        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs', thumbnail: '' },
+        { id: 'UCcdwLMPsaU2ezNSJU1nFoBQ', name: 'Pinkfong Baby Shark - Kids\' Songs & Stories', thumbnail: '' }
       ]
     }
   ],
   currentProfileId: DEFAULT_PROFILE_ID,
   apiKey: '',
-  shareStats: false, // New opt-in field
-  anonymousUserId: null // Generated upon opt-in
+  shareStats: true, // Default ON - help community discover safe channels
+  anonymousUserId: null, // Generated upon opt-in
+  filterShorts: true // Default ON
 };
+
+// ...
 
 // Mock Data for Demo Mode
 const MOCK_VIDEOS = [
@@ -235,7 +253,7 @@ function init() {
   // Check if we need to force refreshing cache due to channel changes?
   // For now, let fetchAllVideos handle cache validation.
   fetchAllVideos();
-  checkAndUploadStats();
+  // Stats upload moved to after Drive sync to ensure correct channel data
 
 
   setupEventListeners();
@@ -298,6 +316,9 @@ function initializeGSI(clientId) {
         await fetchGoogleUserInfo().catch(console.warn); // Fetch and display user info
 
         await syncWithDrive();
+
+        // After sync, upload stats with correct channel data (force=true)
+        checkAndUploadStats(true);
 
         loginBtn.textContent = 'Sync Now (Re-sync)';
         loginBtn.disabled = false; // Re-enable for manual sync
@@ -492,10 +513,11 @@ async function fetchAllVideos(forceRefresh = false) {
 }
 
 // --- Lite Mode: RSS Fetcher ---
+// --- Lite Mode: RSS Fetcher ---
 async function fetchChannelRSS(channel) {
   // Public YouTube RSS Feed URL
   const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.id}`;
-  // Use AllOrigins as CORS Proxy
+  // Use AllOrigins as CORS Proxy (JSON mode to avoid CORS on raw XML)
   const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`;
 
   try {
@@ -512,11 +534,20 @@ async function fetchChannelRSS(channel) {
     const videos = [];
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
-      const videoId = entry.getElementsByTagName("yt:videoId")[0]?.textContent;
-      const title = entry.getElementsByTagName("title")[0]?.textContent;
-      const published = entry.getElementsByTagName("published")[0]?.textContent;
+      // Robust tag finding for different browsers/parsers
+      const videoId = (entry.getElementsByTagName("yt:videoId")[0] || entry.getElementsByTagName("videoId")[0])?.textContent;
+      const title = (entry.getElementsByTagName("title")[0])?.textContent; // Title usually standard
+      const published = (entry.getElementsByTagName("published")[0])?.textContent;
 
-      if (videoId) {
+      if (videoId && title) {
+        // Filter Shorts by Title (RSS Limitation)
+        const titleLower = title.toLowerCase();
+        const isShortsKeyword = /#shorts|\[shorts\]|\(shorts\)|^shorts$| shorts$/.test(titleLower);
+
+        if (state.data.filterShorts && isShortsKeyword) {
+          continue;
+        }
+
         // RSS doesn't give good thumbnails, so we construct standard YT thumbnail URL
         const thumb = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
 
@@ -561,7 +592,8 @@ async function fetchChannelVideos(channel) {
   }
 
   // Fetch Videos cost: 1 unit
-  const plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=10&key=${state.data.apiKey}`;
+  // Increased maxResults to 20 to buffer for Shorts filtering
+  const plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=20&key=${state.data.apiKey}`;
 
   try {
     const plRes = await fetch(plUrl);
@@ -569,19 +601,66 @@ async function fetchChannelVideos(channel) {
 
     if (!plData.items) return [];
 
-    return plData.items.map(item => ({
-      id: item.snippet.resourceId.videoId,
-      title: item.snippet.title,
-      thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium?.url,
-      channelTitle: item.snippet.channelTitle,
-      channelId: channel.id, // Store Channel ID
-      publishedAt: item.snippet.publishedAt
-    }));
+    const rawItems = plData.items;
+
+    // --- Shorts Filtering (API Mode) ---
+    // We need to fetch 'contentDetails' to check duration. 
+    // This costs 1 extra unit per batch, but ensures accuracy.
+    const videoIds = rawItems.map(item => item.snippet.resourceId.videoId).join(',');
+    const detailsUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoIds}&key=${state.data.apiKey}`;
+
+    let allowedIds = new Set();
+
+    try {
+      const dRes = await fetch(detailsUrl);
+      const dData = await dRes.json();
+
+      if (dData.items) {
+        dData.items.forEach(v => {
+          const duration = parseDuration(v.contentDetails.duration);
+
+          // Filter: Updated for new YouTube Shorts policy (up to 3 mins)
+          // If duration > 180 seconds (3 mins), it's definitely NOT a Short.
+          if (duration > 180) {
+            allowedIds.add(v.id);
+          } else {
+            console.log(`Filtered Short: ${v.snippet?.title || v.id} (${duration}s)`);
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to fetch video durations, skipping filter', err);
+      // Fallback: Allow all if detailed check fails
+      rawItems.forEach(item => allowedIds.add(item.snippet.resourceId.videoId));
+    }
+
+    return rawItems
+      .filter(item => allowedIds.has(item.snippet.resourceId.videoId))
+      .map(item => ({
+        id: item.snippet.resourceId.videoId,
+        title: item.snippet.title,
+        thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium?.url,
+        channelTitle: item.snippet.channelTitle,
+        channelId: channel.id, // Store Channel ID
+        publishedAt: item.snippet.publishedAt
+      }));
 
   } catch (e) {
     console.error(`Failed to fetch videos for ${channel.id}`, e);
     return [];
   }
+}
+
+// Helper: Parse ISO 8601 Duration to Seconds
+function parseDuration(duration) {
+  const match = duration.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
+  if (!match) return 0;
+
+  const hours = (parseInt(match[1]) || 0);
+  const minutes = (parseInt(match[2]) || 0);
+  const seconds = (parseInt(match[3]) || 0);
+
+  return (hours * 3600) + (minutes * 60) + seconds;
 }
 
 // --- Sorting Logic ---
@@ -664,6 +743,35 @@ async function fetchMissingChannelIcons() {
 // --- Channel Search ---
 let searchDebounce;
 
+// --- Fetch Top Ranked Channels from Stats ---
+async function fetchTopRankedChannels() {
+  try {
+    const response = await fetch(STATS_ENDPOINT + '?action=getRankings');
+    const data = await response.json();
+
+    if (!data.channels || !Array.isArray(data.channels)) {
+      return [];
+    }
+
+    // Transform the ranking data to match the search result format
+    return data.channels.map(ch => ({
+      snippet: {
+        channelId: ch.id,
+        channelTitle: ch.name,
+        description: `${ch.count || 0} users subscribed`,
+        thumbnails: {
+          default: {
+            url: ch.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(ch.name)}&size=88&background=random`
+          }
+        }
+      }
+    }));
+  } catch (e) {
+    console.warn('Failed to fetch top ranked channels', e);
+    return [];
+  }
+}
+
 async function searchChannels(query) {
   if (!state.data.apiKey) {
     alert('Please enter a valid API Key first.');
@@ -691,8 +799,9 @@ function renderSearchResults(items) {
     li.className = 'search-result-item';
     li.onclick = () => addChannelFromSearch(item);
     const thumb = item.snippet.thumbnails.default?.url;
+    const fallbackThumb = `https://ui-avatars.com/api/?name=${encodeURIComponent(item.snippet.channelTitle)}&size=88&background=random`;
     li.innerHTML = `
-      <img src="${thumb}" class="search-avatar" />
+      <img src="${thumb || fallbackThumb}" class="search-avatar" onerror="this.onerror=null;this.src='${fallbackThumb}'" />
       <div class="search-info">
         <span class="search-name">${item.snippet.channelTitle}</span>
         <span class="search-sub">${item.snippet.description.substring(0, 30)}...</span>
@@ -728,14 +837,69 @@ function addChannelFromSearch(item) {
 
 
 // --- Rendering ---
-function updateProfileUI() {
+// --- Avatar Picker Logic ---
+function openAvatarPicker(profileId) {
+  // Check if picker already exists
+  let picker = document.getElementById('avatar-picker-overlay');
+
+  if (!picker) {
+    picker = document.createElement('div');
+    picker.id = 'avatar-picker-overlay';
+    picker.className = 'avatar-picker-overlay hidden';
+    picker.innerHTML = `
+      <div class="avatar-picker-content">
+        <h3 style="margin-top:0; margin-bottom: 20px;">Pick an Avatar 🎨</h3>
+        <div class="avatar-grid" id="avatar-grid"></div>
+        <button id="close-avatar-picker-btn" class="secondary-btn" style="margin-top:1.5rem; width:100%;">Cancel</button>
+      </div>
+    `;
+    document.body.appendChild(picker);
+
+    // Close logic
+    const closeBtn = document.getElementById('close-avatar-picker-btn');
+    if (closeBtn) closeBtn.onclick = () => picker.classList.add('hidden');
+
+    picker.onclick = (e) => {
+      if (e.target === picker) picker.classList.add('hidden');
+    };
+  }
+
+  const grid = document.getElementById('avatar-grid');
+  grid.innerHTML = '';
+
+  AVATARS.forEach(avatar => {
+    const div = document.createElement('div');
+    div.className = 'avatar-option';
+    div.textContent = avatar;
+    div.onclick = () => {
+      // Update Profile
+      const profile = state.data.profiles.find(p => p.id === profileId);
+      if (profile) {
+        profile.avatar = avatar;
+        saveLocalData();
+        updateProfileUI(); // Refresh list and header
+      }
+      picker.classList.add('hidden');
+    };
+    grid.appendChild(div);
+  });
+
+  picker.classList.remove('hidden');
+}
+
+
+// Helper to keep Homepage Header in sync
+function renderUserProfileHeader() {
   const profile = getCurrentProfile();
   headerProfileName.textContent = profile.name;
   profileSelector.classList.remove('hidden');
-
-  renderProfileList();
   renderProfileDropdown();
   renderChannelNav(); // Render nav for current profile
+}
+
+function updateProfileUI() {
+  renderUserProfileHeader();
+  renderProfileList();
 }
 
 function renderChannelNav() {
@@ -746,11 +910,10 @@ function renderChannelNav() {
   // "All" Button
   const allBtn = document.createElement('div');
   allBtn.className = `nav-item ${state.activeChannelId === null ? 'active' : ''}`;
-  // Use a colorful placeholder for "All"
-  const allIcon = `https://ui-avatars.com/api/?name=All&background=FF6B6B&color=fff&size=128&bold=true`;
+  allBtn.title = "All Videos"; // Tooltip
   allBtn.innerHTML = `
-        <img src="${allIcon}" class="nav-avatar" alt="All" />
-        <span>All Videos</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        <span>All</span>
     `;
   allBtn.onclick = () => filterVideos(null);
   channelNav.appendChild(allBtn);
@@ -759,6 +922,7 @@ function renderChannelNav() {
   profile.channels.forEach(channel => {
     const btn = document.createElement('div');
     btn.className = `nav-item ${state.activeChannelId === channel.id ? 'active' : ''}`;
+    btn.title = channel.name; // Tooltip
 
     let avatarSrc = channel.thumbnail;
     if (!avatarSrc) {
@@ -767,7 +931,7 @@ function renderChannelNav() {
     }
 
     btn.innerHTML = `
-            <img src="${avatarSrc}" class="nav-avatar" alt="${channel.name}" />
+            <img src="${avatarSrc}" class="nav-pill-icon" alt="${channel.name}" />
             <span>${channel.name}</span>
         `;
     btn.onclick = () => filterVideos(channel.id);
@@ -777,6 +941,22 @@ function renderChannelNav() {
 
 function filterVideos(channelId) {
   state.activeChannelId = channelId;
+  const label = document.getElementById('active-channel-display');
+
+  if (label) {
+    label.classList.remove('show');
+    // Short delay for fade effect
+    setTimeout(() => {
+      if (channelId === null) {
+        label.textContent = "All Videos";
+      } else {
+        const channel = getCurrentProfile().channels.find(c => c.id === channelId);
+        label.textContent = channel ? channel.name : "Unknown Channel";
+      }
+      label.classList.add('show');
+    }, 150);
+  }
+
   renderChannelNav(); // Update visual state
   renderVideos();     // Re-render video list
 }
@@ -784,17 +964,23 @@ function filterVideos(channelId) {
 function renderProfileDropdown() {
   if (!profileDropdown) return;
   profileDropdown.innerHTML = '';
+  // Force show
+  profileDropdown.classList.remove('hidden');
 
   state.data.profiles.forEach(p => {
+    // Ensure avatar exists (migration)
+    if (!p.avatar) p.avatar = AVATARS[Math.floor(Math.random() * AVATARS.length)];
+
     const li = document.createElement('li');
     li.className = 'profile-dropdown-item';
     if (p.id === state.data.currentProfileId) li.classList.add('active');
 
-    li.textContent = p.name;
+    // Add icon for better visual
+    li.innerHTML = `<span style="margin-right:6px; font-size:1.2rem;">${p.avatar}</span> ${p.name}`;
+
     li.onclick = (e) => {
       e.stopPropagation();
       switchProfile(p.id);
-      profileDropdown.classList.add('hidden');
     };
     profileDropdown.appendChild(li);
   });
@@ -805,6 +991,9 @@ function renderProfileList() {
   profileListContainer.innerHTML = '';
 
   state.data.profiles.forEach((p, index) => {
+    // Ensure avatar exists (migration)
+    if (!p.avatar) p.avatar = AVATARS[Math.floor(Math.random() * AVATARS.length)];
+
     const div = document.createElement('div');
     div.className = `profile-list-item ${p.id === state.data.currentProfileId ? 'active' : ''}`;
     div.draggable = true; // Enable Drag
@@ -846,6 +1035,10 @@ function renderProfileList() {
             <div class="profile-info-row" style="display:flex; align-items:center; width:100%; gap: 10px;">
                 <span class="drag-handle" style="cursor: grab; color: #ccc; font-size: 1.2rem; padding: 5px;">⣿</span>
                 
+                <button class="avatar-btn" title="Click to change avatar" style="background: #f0f0f0; border:none; font-size: 1.5rem; border-radius: 50%; width: 40px; height: 40px; cursor: pointer; transition: transform 0.2s;">
+                  ${p.avatar}
+                </button>
+
                 <div class="profile-click-area" style="flex:1; display:flex; flex-direction:column; justify-content:center; cursor: pointer;">
                     <span style="font-weight:600; font-size:1rem;">${p.name}</span>
                     <span style="font-size:0.8rem; color:#888;">${p.channels.length} channels</span>
@@ -861,6 +1054,16 @@ function renderProfileList() {
                 </div>
             </div>
         `;
+
+    // Avatar Change Logic (Picker Modal)
+    const avatarBtn = div.querySelector('.avatar-btn');
+    avatarBtn.onclick = (e) => {
+      e.stopPropagation();
+      openAvatarPicker(p.id);
+    };
+
+    avatarBtn.onmouseenter = () => avatarBtn.style.transform = 'scale(1.1)';
+    avatarBtn.onmouseleave = () => avatarBtn.style.transform = 'scale(1)';
 
     // Make the text area clickable to switch
     const clickArea = div.querySelector('.profile-click-area');
@@ -970,12 +1173,14 @@ function closePlayer() {
 }
 
 // --- Profile Actions ---
+
 function addProfile(name) {
   if (!name) return;
   const newId = 'child_' + Date.now();
   state.data.profiles.push({
     id: newId,
     name: name,
+    avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)], // Random Avatar
     channels: []
   });
   saveLocalData();
@@ -1038,6 +1243,7 @@ async function checkAndUploadStats(force = false) {
   if (!state.data.anonymousUserId) {
     state.data.anonymousUserId = crypto.randomUUID ? crypto.randomUUID() : 'user_' + Date.now();
     saveLocalData();
+    if (state.accessToken) saveToDrive(); // Force push ID to cloud
   }
 
   console.log('Uploading anonymous stats...');
@@ -1047,7 +1253,7 @@ async function checkAndUploadStats(force = false) {
   state.data.profiles.forEach(p => {
     p.channels.forEach(c => {
       if (!allChannelsMap.has(c.id)) {
-        allChannelsMap.set(c.id, { id: c.id, name: c.name });
+        allChannelsMap.set(c.id, { id: c.id, name: c.name, thumbnail: c.thumbnail || '' });
       }
     });
   });
@@ -1097,39 +1303,29 @@ function setupEventListeners() {
   });
 
   // Sort Buttons
+  // Sort Buttons - Replace with SVG content if not already done in HTML, 
+  // but better to just update HTML structure or let JS handle active states.
+  // Actually, let's update the HTML for sort buttons to have SVGs directly.
+  // Wait, I should do this in HTML or JS. Since I can't edit HTML easily for all 3 buttons without replacing a block, 
+  // I will inject the SVGs on init or just assume the user wants me to change the HTML file.
+  // Let's change the JS to inject SVGs into those buttons if they exist, or better yet, I will use replace_file_content on index.html next.
+  // For now, let's just keep the JS logic the same.
   sortButtons.forEach(btn => {
     btn.onclick = () => sortVideos(btn.dataset.sort);
   });
 
   document.getElementById('settings-btn').onclick = () => {
-    const a = Math.floor(Math.random() * 5) + 1;
-    const b = Math.floor(Math.random() * 5) + 1;
-    const sum = a + b;
-    document.getElementById('gate-question').textContent = `What is ${a} + ${b}?`;
-    document.getElementById('gate-answer').value = '';
-    gateModal.dataset.answer = sum;
-    gateModal.classList.remove('hidden');
-  };
+    // Open Settings Directly (No Parent Gate)
+    settingsModal.classList.remove('hidden');
+    // Refresh Lists just in case
+    renderChannelList();
+    updateProfileUI();
+    const apiKeyInput = document.getElementById('api-key-input');
+    if (apiKeyInput) apiKeyInput.value = state.data.apiKey;
 
-  document.getElementById('gate-submit').onclick = () => {
-    const input = parseInt(document.getElementById('gate-answer').value);
-    const correct = parseInt(gateModal.dataset.answer);
-    if (input === correct) {
-      gateModal.classList.add('hidden');
-      settingsModal.classList.remove('hidden');
-      // Refresh Lists just in case
-      renderChannelList();
-      updateProfileUI();
-      apiKeyInput.value = state.data.apiKey;
-
-      // Load Stats Checkbox
-      const shareStatsCb = document.getElementById('share-stats-checkbox');
-      if (shareStatsCb) shareStatsCb.checked = !!state.data.shareStats;
-
-    } else {
-      alert('Incorrect! Ask your parents.');
-      gateModal.classList.add('hidden');
-    }
+    // Load Stats Checkbox
+    const shareStatsCb = document.getElementById('share-stats-checkbox');
+    if (shareStatsCb) shareStatsCb.checked = !!state.data.shareStats;
   };
 
   document.getElementById('close-settings').onclick = () => {
@@ -1148,35 +1344,122 @@ function setupEventListeners() {
       }
       saveLocalData();
       if (state.data.shareStats) {
+        // Ensure ID exists
+        if (!state.data.anonymousUserId) {
+          state.data.anonymousUserId = crypto.randomUUID ? crypto.randomUUID() : 'user_' + Date.now();
+        }
+
+        // Critical: Save immediately so ID persists to Drive
+        // This prevents ID regeneration on next reload/login
+        saveLocalData();
+
         checkAndUploadStats(true); // Attempt upload immediately if opted in
       }
     };
   }
 
-  // API Key Visibility Toggle
-  const toggleApiBtn = document.getElementById('toggle-api-visibility');
+  // --- Connection Mode Logic ---
+  const modeLite = document.getElementById('mode-lite');
+  const modePro = document.getElementById('mode-pro');
+  const apiSection = document.getElementById('api-section');
+  const modeDescBox = document.getElementById('mode-desc-box');
+  const modeTitle = document.getElementById('mode-title-text');
+  const modeDesc = document.getElementById('mode-desc-text');
   const apiKeyInput = document.getElementById('api-key-input');
+  const apiStatus = document.getElementById('api-status');
 
-  if (toggleApiBtn && apiKeyInput) {
-    toggleApiBtn.onclick = () => {
-      if (apiKeyInput.type === 'password') {
-        apiKeyInput.type = 'text';
-        toggleApiBtn.textContent = '🔒'; // Lock icon for 'Hide' state (as implies privacy)
-      } else {
-        apiKeyInput.type = 'password';
-        toggleApiBtn.textContent = '👁️'; // Eye icon for 'Show' state
-      }
+  // Helper to set UI State
+  function setModeUI(isPro) {
+    if (isPro) {
+      modeLite.classList.remove('active');
+      modePro.classList.add('active');
+      apiSection.classList.add('visible');
+
+      modeDescBox.classList.remove('lite');
+      modeTitle.textContent = 'Advanced Control';
+      modeDesc.textContent = 'Unlocks Search, unlimited history, & faster sync. Requires API Key.';
+    } else {
+      modePro.classList.remove('active');
+      modeLite.classList.add('active');
+      apiSection.classList.remove('visible');
+
+      modeDescBox.classList.add('lite');
+      modeTitle.textContent = 'Free & Simple';
+      modeDesc.textContent = 'Shows latest 15 videos. No setup required. Perfect for casual viewing.';
+    }
+  }
+
+  // Initial State Check
+  if (state.data.apiKey) {
+    setModeUI(true);
+    apiKeyInput.value = state.data.apiKey;
+  } else {
+    setModeUI(false);
+  }
+
+  // Mode Switch Listeners
+  modeLite.onclick = () => setModeUI(false);
+
+  modePro.onclick = () => {
+    setModeUI(true);
+    // Auto-focus input if empty
+    if (!apiKeyInput.value) setTimeout(() => apiKeyInput.focus(), 100);
+  };
+
+  // Toggle Eye Icon
+  document.getElementById('toggle-api-visibility').onclick = () => {
+    apiKeyInput.type = apiKeyInput.type === 'password' ? 'text' : 'password';
+  };
+
+  // Toggle API Help
+  const helpBtn = document.getElementById('toggle-api-help');
+  if (helpBtn) {
+    helpBtn.onclick = () => {
+      document.getElementById('api-help-content').classList.toggle('hidden');
     };
   }
 
+  // Save Logic
   document.getElementById('save-api-key').onclick = () => {
-    const key = apiKeyInput.value.trim();
-    if (key) {
+    const isPro = modePro.classList.contains('active');
+
+    // Reset Toast
+    apiStatus.className = 'status-toast';
+    void apiStatus.offsetWidth; // trigger reflow
+
+    if (!isPro) {
+      // Saving Lite Mode
+      state.data.apiKey = '';
+      saveLocalData();
+
+      apiStatus.textContent = '🎈 Lite Mode Active!';
+      apiStatus.classList.add('success', 'show');
+
+      searchResultsDropdown.classList.add('hidden'); // Clear search
+      fetchAllVideos(true);
+
+    } else {
+      // Saving Pro Mode
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        apiStatus.textContent = '⚠️ Please enter an API Key for Pro Mode';
+        apiStatus.classList.add('warning', 'show');
+        apiKeyInput.focus();
+        return;
+      }
+
       state.data.apiKey = key;
       saveLocalData();
-      apiStatus.textContent = 'Key saved!';
-      fetchAllVideos();
+
+      apiStatus.textContent = '🚀 Pro Mode Activated!';
+      apiStatus.classList.add('success', 'show');
+      fetchAllVideos(true);
     }
+
+    // Auto hide toast
+    setTimeout(() => {
+      apiStatus.classList.remove('show');
+    }, 3000);
   };
 
   if (loginBtn) {
@@ -1196,9 +1479,24 @@ function setupEventListeners() {
     addProfile(newProfileNameInput.value.trim());
   };
 
-  channelSearchInput.addEventListener('input', (e) => {
+  // Search Input Listeners
+  channelSearchInput.addEventListener('focus', async () => {
+    if (!channelSearchInput.value.trim()) {
+      const topChannels = await fetchTopRankedChannels();
+      renderSearchResults(topChannels);
+    }
+  });
+
+  channelSearchInput.addEventListener('input', async (e) => {
     const query = e.target.value.trim();
     clearTimeout(searchDebounce);
+
+    if (query.length === 0) {
+      const topChannels = await fetchTopRankedChannels();
+      renderSearchResults(topChannels);
+      return;
+    }
+
     if (query.length < 3) {
       searchResultsDropdown.classList.add('hidden');
       return;

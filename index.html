@@ -42,30 +42,54 @@
       </div>
 
       <div class="header-controls">
-        <button id="refresh-btn" class="icon-btn" title="Refresh Videos">🔄</button>
-        <button id="settings-btn" class="icon-btn" title="Parent Settings">⚙️</button>
+        <button id="refresh-btn" class="icon-btn" title="Refresh Videos">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 4v6h-6"></path>
+            <path d="M1 20v-6h6"></path>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+        </button>
+        <button id="settings-btn" class="icon-btn" title="Parent Settings">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z">
+            </path>
+          </svg>
+        </button>
       </div>
     </header>
 
     <nav id="channel-nav" class="channel-nav">
       <!-- Channel Pills injected here -->
     </nav>
+    <div class="channel-toolbar">
+      <div class="channel-info">
+        <div id="active-channel-display" class="channel-title-display">All Videos</div>
+        <span id="video-count" class="video-count">0 videos</span>
+      </div>
 
-    <!-- Toolbar: Sort & Count -->
-    <div class="toolbar">
-      <span id="video-count" class="video-count">0 videos</span>
       <div class="sort-controls">
-        <button class="sort-btn active" data-sort="newest" title="Newest First">
-          <span class="sort-icon">📅</span>
-          <span class="sort-label">Newest</span>
+        <button class="sort-btn active" data-sort="shuffle" title="Shuffle Videos">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            class="sort-icon" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 3 21 3 21 8"></polyline>
+            <line x1="4" y1="20" x2="21" y2="3"></line>
+            <polyline points="21 16 21 21 16 21"></polyline>
+            <line x1="15" y1="15" x2="21" y2="21"></line>
+            <line x1="4" y1="4" x2="9" y2="9"></line>
+          </svg>
         </button>
-        <button class="sort-btn" data-sort="oldest" title="Oldest First">
-          <span class="sort-icon">⏳</span>
-          <span class="sort-label">Oldest</span>
-        </button>
-        <button class="sort-btn" data-sort="shuffle" title="Shuffle Videos">
-          <span class="sort-icon">🔀</span>
-          <span class="sort-label">Shuffle</span>
+        <button class="sort-btn" data-sort="newest" title="Newest First">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            class="sort-icon" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
         </button>
       </div>
     </div>
@@ -98,83 +122,153 @@
     <div id="settings-modal" class="modal-overlay hidden">
       <div class="modal-content glass">
         <button id="close-settings" class="close-btn-corner">✖</button>
-        <h2>Parent Settings 🔒</h2>
+        <h2>Parent Settings</h2>
 
-        <section class="settings-section">
-          <h3>Who is watching?</h3>
-          <div id="profile-list-container" class="profile-list">
-            <!-- Dynamic profiles -->
-          </div>
-
-          <div class="add-profile-form" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #ddd;">
-            <input type="text" id="new-profile-name" placeholder="Name of new child..." />
-            <button id="add-profile-btn" class="secondary-btn" title="Add Child"
-              style="font-size: 1.2rem; line-height: 1; padding: 0 1rem;">+</button>
-          </div>
-        </section>
-
-        <section class="settings-section">
-          <h3>Google Sync</h3>
-          <p class="small-text">Sync your channels across devices using Google Drive.</p>
-          <!-- Client ID is now embedded, hiding input -->
-          <div style="display:none;">
-            <input type="text" id="client-id-input" placeholder="Google OAuth Client ID" />
-            <button id="save-client-id" class="secondary-btn">Save Client ID</button>
-          </div>
-
-          <div id="google-user-info" class="user-info-display hidden"
-            style="display: none; align-items: center; gap: 10px; margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 8px;">
-            <img id="google-avatar" src="" alt="Avatar" style="width: 32px; height: 32px; border-radius: 50%;" />
-            <div style="display: flex; flex-direction: column;">
-              <span id="google-name" style="font-weight: 600; font-size: 0.95rem;"></span>
-              <span id="google-email" style="font-size: 0.8rem; color: #666;"></span>
+        <div class="settings-body">
+          <section class="settings-section">
+            <h3>Who is watching?</h3>
+            <div id="profile-list-container" class="profile-list">
+              <!-- Dynamic profiles -->
             </div>
-          </div>
 
-          <button id="google-login-btn" class="primary-btn" style="display:none; margin-top: 10px; width: 100%;">
-            Login with Google to Sync
-          </button>
-        </section>
-
-        <section class="settings-section">
-          <h3>YouTube API Key</h3>
-          <p class="small-text">Required to fetch videos. Your key is stored locally in your browser.</p>
-          <div class="api-input-wrapper" style="display: flex; gap: 8px; margin-bottom: 10px;">
-            <input type="password" id="api-key-input" placeholder="Paste your API Key here"
-              style="flex: 1; padding: 10px; border-radius: 8px; border: 1px solid #ddd;" />
-            <button id="toggle-api-visibility" class="secondary-btn" style="padding: 0 12px; font-size: 1.2rem;"
-              title="Show/Hide">👁️</button>
-          </div>
-          <button id="save-api-key" class="primary-btn">Save Key</button>
-          <p id="api-status" class="status-msg"></p>
-        </section>
-
-        <section class="settings-section"
-          style="border-top: 1px solid rgba(0,0,0,0.1); padding-top: 1rem; margin-top: 1rem;">
-          <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
-            <input type="checkbox" id="share-stats-checkbox" style="width: 20px; height: 20px;">
-            <span style="font-weight: 600; font-size: 1rem;">Participate in Ranking (Anonymous)</span>
-          </label>
-          <p class="small-text" style="margin-top: 5px; color: #666;">
-            Help the community discover safe channels! We only share channel names (no personal data).
-          </p>
-        </section>
-
-        <section class="settings-section">
-          <h3>Manage Channels</h3>
-          <div class="add-channel-form">
-            <div class="search-wrapper">
-              <input type="text" id="channel-search-input" placeholder="Search Channel Name (e.g., Peppa Pig)..."
-                autocomplete="off" />
-              <ul id="search-results-dropdown" class="search-dropdown hidden"></ul>
+            <div class="add-profile-form" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed #ddd;">
+              <input type="text" id="new-profile-name" placeholder="Name of new child..." />
+              <button id="add-profile-btn" class="secondary-btn" title="Add Child"
+                style="font-size: 1.2rem; line-height: 1; padding: 0 1rem;">+</button>
             </div>
-            <!-- Optional: Keep manual add if needed, but search is primary now -->
-          </div>
-          <ul id="channel-list" class="channel-list">
-            <!-- List of added channels -->
-          </ul>
-          <p class="small-text">Tip: Find Channel ID in the URL of a channel's 'About' page.</p>
-        </section>
+          </section>
+
+          <section class="settings-section">
+            <h3>Manage Channels</h3>
+            <div class="add-channel-form">
+              <div class="search-wrapper">
+                <input type="text" id="channel-search-input" placeholder="Search Channel Name (e.g., Peppa Pig)..."
+                  autocomplete="off" />
+                <ul id="search-results-dropdown" class="search-dropdown hidden"></ul>
+              </div>
+              <!-- Optional: Keep manual add if needed, but search is primary now -->
+            </div>
+            <ul id="channel-list" class="channel-list">
+              <!-- List of added channels -->
+            </ul>
+            <p class="small-text">Tip: Find Channel ID in the URL of a channel's 'About' page.</p>
+          </section>
+
+          <section class="settings-section">
+            <h3>Connection Mode 📶</h3>
+
+            <!-- Mode Selector Switch -->
+            <div class="mode-selector">
+              <div id="mode-lite" class="mode-option active">
+                <span class="mode-icon">🎈</span> Lite Mode
+              </div>
+              <div id="mode-pro" class="mode-option">
+                <span class="mode-icon">🚀</span> Pro Mode
+              </div>
+              <div class="mode-highlight"></div>
+            </div>
+
+            <!-- Dynamic Description Box -->
+            <div id="mode-desc-box" class="mode-description lite">
+              <span class="info-icon">ℹ️</span>
+              <div>
+                <strong id="mode-title-text" style="display:block; margin-bottom:4px; color:#333;">Free &
+                  Simple</strong>
+                <span id="mode-desc-text">Shows latest 15 videos. No setup required. Perfect for casual viewing.</span>
+              </div>
+            </div>
+
+            <!-- Pro settings (Hidden by default) -->
+            <div id="api-section" class="api-input-container">
+              <label style="display:block; margin: 0 0 8px 0; font-weight: 600; font-size: 0.9rem; color: #343a40;">
+                YouTube API Key
+              </label>
+              <div class="input-group">
+                <input type="password" id="api-key-input" placeholder="Paste your API Key here..." autocomplete="off" />
+                <button id="toggle-api-visibility" class="toggle-visibility-btn" title="Show/Hide">👁️</button>
+              </div>
+              <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-link">
+                Get a free Key from Google ↗
+              </a>
+              <button type="button" id="toggle-api-help" class="help-toggle-btn">How to get Key? ❓</button>
+
+              <div id="api-help-content" class="api-help-content hidden">
+                <strong>Steps to get API Key:</strong>
+                <ol>
+                  <li>Go to <a href="https://console.cloud.google.com/" target="_blank">Google Cloud Console</a>.</li>
+                  <li>Create a <strong>New Project</strong>.</li>
+                  <li>Search for <strong>"YouTube Data API v3"</strong> and enable it.</li>
+                  <li>Go to <strong>Credentials</strong> → <strong>Create Credentials</strong> → <strong>API
+                      Key</strong>.</li>
+                  <li>Copy the key and paste it here!</li>
+                </ol>
+                <a href="https://developers.google.com/youtube/v3/getting-started" target="_blank"
+                  style="font-size:0.8rem; display:block; margin-top:5px;">Full Tutorial ↗</a>
+              </div>
+
+              <p class="small-text"
+                style="color: #d63031; background: #fff5f5; padding: 8px; border-radius: 6px; margin-top: 10px;">
+                🔒 <strong>Security Note:</strong> Your API Key is stored ONLY on this device. If you switch devices,
+                you will need to enter it again.
+              </p>
+            </div>
+
+            <!-- Action Row -->
+            <div class="action-row">
+              <div style="flex:1"></div> <!-- Spacer -->
+              <button id="save-api-key" class="primary-btn" style="width: 100%;">
+                Save Settings
+              </button>
+            </div>
+
+            <div id="api-status" class="status-toast"></div>
+          </section>
+
+          <section class="settings-section">
+            <h3>Content Preferences</h3>
+            <label style="display: flex; align-items: start; gap: 10px; cursor: pointer;">
+              <input type="checkbox" id="filter-shorts-checkbox" checked
+                style="width: 20px; height: 20px; margin-top:2px;">
+              <div>
+                <span style="font-weight: 600; font-size: 1rem;">Filter YouTube Shorts</span>
+                <p class="small-text" style="margin-top: 4px; color: #666; font-weight: normal;">
+                  <strong>Lite Mode:</strong> Hides videos with '#shorts' in the title.<br>
+                  <strong>Pro Mode:</strong> Hides all videos under 3 minutes (more accurate).
+                </p>
+              </div>
+            </label>
+          </section>
+
+          <section class="settings-section"
+            style="border-top: 1px solid rgba(0,0,0,0.1); padding-top: 1rem; margin-top: 1rem;">
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+              <input type="checkbox" id="share-stats-checkbox" style="width: 20px; height: 20px;">
+              <span style="font-weight: 600; font-size: 1rem;">Participate in Ranking (Anonymous)</span>
+            </label>
+            <p class="small-text" style="margin-top: 5px; color: #666;">
+              Help the community discover safe channels! We only share channel names (no personal data).
+            </p>
+          </section>
+
+
+          <section class="settings-section">
+            <h3>Google Sync</h3>
+            <p class="small-text">Back up your settings to Google Drive.</p>
+
+            <div id="google-user-info" class="user-info-display hidden"
+              style="display: none; align-items: center; gap: 10px; margin-bottom: 15px; padding: 10px; background: #f5f5f5; border-radius: 8px;">
+              <img id="google-avatar" src="" alt="Avatar" style="width: 32px; height: 32px; border-radius: 50%;" />
+              <div style="display: flex; flex-direction: column;">
+                <span id="google-name" style="font-weight: 600; font-size: 0.95rem;"></span>
+                <span id="google-email" style="font-size: 0.8rem; color: #666;"></span>
+              </div>
+            </div>
+
+            <button id="google-login-btn" class="secondary-btn" style="display:none; margin-top: 10px; width: 100%;">
+              Login with Google to Sync
+            </button>
+          </section>
+        </div>
       </div>
     </div>
 
