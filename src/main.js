@@ -342,6 +342,76 @@ async function fetchGoogleUserInfo() {
   }
 }
 
+// --- Sync UI & Logout ---
+function updateSyncUI() {
+  const loginBtn = document.getElementById('google-login-btn');
+  const logoutBtn = document.getElementById('google-logout-btn');
+  const userInfoCard = document.getElementById('google-user-info');
+
+  if (!loginBtn) return;
+
+  if (state.accessToken) {
+    // Logged In State
+    loginBtn.style.display = 'block';
+    loginBtn.textContent = t('sync_now');
+    loginBtn.disabled = false;
+    loginBtn.onclick = async () => {
+      loginBtn.disabled = true;
+      loginBtn.textContent = t('syncing');
+      await syncWithDrive();
+      loginBtn.disabled = false;
+      loginBtn.textContent = t('sync_now');
+    };
+
+    if (logoutBtn) {
+      logoutBtn.style.display = 'block';
+      logoutBtn.textContent = t('logout');
+      logoutBtn.onclick = handleLogout;
+    }
+
+    if (userInfoCard) {
+      userInfoCard.classList.remove('hidden');
+      userInfoCard.style.display = 'flex';
+    }
+  } else {
+    // Logged Out State
+    loginBtn.style.display = 'block';
+    loginBtn.textContent = t('login_google');
+    loginBtn.disabled = false;
+    loginBtn.onclick = () => {
+      if (state.tokenClient) {
+        state.tokenClient.requestAccessToken({ prompt: 'consent' });
+      } else {
+        console.warn('Google Token Client not initialized');
+      }
+    };
+
+    if (logoutBtn) logoutBtn.style.display = 'none';
+
+    if (userInfoCard) {
+      userInfoCard.classList.add('hidden');
+      userInfoCard.style.display = 'none';
+    }
+  }
+}
+
+function handleLogout() {
+  if (state.accessToken) {
+    const token = state.accessToken;
+    state.accessToken = null;
+
+    // Attempt revoke (best effort)
+    try {
+      if (window.google && window.google.accounts) {
+        google.accounts.oauth2.revoke(token, () => { console.log('Token revoked'); });
+      }
+    } catch (e) { console.warn('Revoke failed', e); }
+  }
+
+  updateSyncUI();
+  alert(t('logout_success') || 'Logged out successfully.');
+}
+
 function init() {
   loadLocalData();
 
@@ -352,40 +422,35 @@ function init() {
     return; // Pause init until wizard finishes
   }
 
-  updateProfileUI();
+  updateProfileUI(); // This also renders channel nav
   setupEventListeners();
   setupSearch();
 
   // Initialize GSI
-  // Try global ID or fallback
   const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
     ? GOOGLE_CLIENT_ID
     : localStorage.getItem('safetube_client_id');
 
-  if (clientId) initializeGSI(clientId);
+  if (clientId) {
+    // Pass callback to update UI after init/login
+    initializeGSI(clientId);
+  }
 
   // Show Onboarding Tooltip (Login Nudge) for users who finished setup but aren't logged in
-  // And haven't dismissed it
   if (currentProfile && !state.accessToken && !localStorage.getItem('onboarding_dismissed')) {
     setTimeout(() => {
       const tooltip = document.getElementById('onboarding-tooltip');
-      // If tooltip element exists (it should be in HTML or added), show it
-      // OR create it if missing? 
       if (tooltip) {
-        const textEl = tooltip.querySelector('.onboarding-text'); // Class from HTML? 
-        // Actually previous code used querySelector('span') or so.
-        // Let's use the helper if available, or just manipulate the visible one.
-        // But the old helper creates a DIFFERENT tooltip structure. 
-        // Let's rely on showOnboardingTooltip() but updated?
-        // No, let's just use the logic I wrote before:
-        if (tooltip.classList.contains('hidden')) tooltip.classList.remove('hidden'); // or add 'show'
+        const textEl = tooltip.querySelector('p');
+        if (textEl) textEl.innerHTML = t('onboarding_login_tooltip'); // Use innerHTML for safety
+        if (tooltip.classList.contains('hidden')) tooltip.classList.remove('hidden');
         tooltip.classList.add('show');
-        // Update text to nudge login
-        const textSpan = tooltip.querySelector('p'); // or .onboarding-text
-        if (textSpan) textSpan.innerHTML = t('onboarding_login_tooltip');
       }
     }, 3000);
   }
+
+  // Initial Sync UI update (Logged out state)
+  updateSyncUI();
 
   fetchMissingChannelIcons(); // Background fetch
   fetchAllVideos(); // Initial fetch
@@ -491,12 +556,19 @@ function initializeGSI(clientId) {
           throw (response);
         }
         state.accessToken = response.access_token;
-        loginBtn.textContent = 'Syncing...';
-        loginBtn.disabled = true; // Temporary disable while syncing
 
-        await fetchGoogleUserInfo().catch(console.warn); // Fetch and display user info
+        // Show syncing state
+        const loginBtn = document.getElementById('google-login-btn');
+        if (loginBtn) {
+          loginBtn.textContent = t('syncing');
+          loginBtn.disabled = true;
+        }
 
+        await fetchGoogleUserInfo().catch(console.warn);
         await syncWithDrive();
+
+        // Reset UI to Logged In state
+        updateSyncUI();
 
         // After sync, upload stats with correct channel data (force=true)
         checkAndUploadStats(true);
@@ -1917,6 +1989,9 @@ async function showOnboardingWizard() {
         </div>
 
         <button class="wizard-btn-primary" id="wizard-next-btn" disabled>${t('next_step') || 'Next'}</button>
+        
+        <div class="wizard-link-restore" id="wizard-restore-btn">${t('restore_backup')}</div>
+        <div id="wizard-google-btn" style="display:none; justify-content:center; margin-top:15px;"></div>
       </div>
 
       <div class="wizard-step" id="wizard-step-2" style="display:none;">
@@ -1935,6 +2010,8 @@ async function showOnboardingWizard() {
   // Step 1 Logic
   const nameInput = modal.querySelector('#wizard-child-name');
   const nextBtn = modal.querySelector('#wizard-next-btn');
+  const restoreBtn = modal.querySelector('#wizard-restore-btn');
+  const googleBtnDiv = modal.querySelector('#wizard-google-btn');
   const step1 = modal.querySelector('#wizard-step-1');
   const step2 = modal.querySelector('#wizard-step-2');
 
@@ -1960,6 +2037,33 @@ async function showOnboardingWizard() {
 
     // Fetch Recommendations
     await loadWizardRecommendations(modal);
+  };
+
+  // Restore Logic
+  restoreBtn.onclick = () => {
+    restoreBtn.style.display = 'none';
+    googleBtnDiv.style.display = 'flex';
+
+    // Initialize GSI locally for this modal
+    const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
+      ? GOOGLE_CLIENT_ID
+      : localStorage.getItem('safetube_client_id');
+
+    if (clientId) {
+      initializeGSI(clientId);
+
+      // Wait for script to be ready if needed, or simple timeout
+      setTimeout(() => {
+        if (window.google && window.google.accounts) {
+          window.google.accounts.id.renderButton(
+            googleBtnDiv,
+            { theme: 'outline', size: 'large', width: 250 }  // customization attributes
+          );
+        }
+      }, 100);
+    } else {
+      alert("Google Client ID not configured.");
+    }
   };
 
   // Step 2 Logic: Finish

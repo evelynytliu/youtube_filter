@@ -35,6 +35,8 @@ export const translations = {
     step2_label: { en: "Pick some channels to start:", zh: "選擇一些推薦頻道：" },
     loading_recommendations: { en: "Loading safe channels...", zh: "正在載入安全頻道..." },
     finish_setup: { en: "Start Watching! 🚀", zh: "開始觀看！🚀" },
+    next_step: { en: "Next", zh: "下一步" },
+    restore_backup: { en: "Already have data? Login to Sync", zh: "已有資料？登入以同步" },
     setup_login_note: { en: "Tip: Login later to sync across devices.", zh: "提示：稍後登入以跨裝置同步設定。" },
 
     // Tooltips & Status
@@ -66,6 +68,7 @@ export const translations = {
     sync_desc: { en: "Back up your settings to Google Drive.", zh: "將您的設定備份到 Google 雲端硬碟。" },
     login_google: { en: "Login with Google to Sync", zh: "使用 Google 登入以同步" },
     sync_now: { en: "Sync Now (Re-sync)", zh: "立即同步 (重新同步)" },
+    logout: { en: "Logout", zh: "登出" },
     syncing: { en: "Syncing...", zh: "同步中..." },
     parents_only: { en: "Parents Only! 🛡️", zh: "限家長存取！ 🛡️" },
     unlock: { en: "Unlock", zh: "解鎖" },
