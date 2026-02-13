@@ -125,9 +125,9 @@ const DEFAULT_DATA = {
       id: DEFAULT_PROFILE_ID,
       name: 'Default Child',
       channels: [
-        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes', thumbnail: '' },
-        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs', thumbnail: '' },
-        { id: 'UCcdwLMPsaU2ezNSJU1nFoBQ', name: 'Pinkfong Baby Shark - Kids\' Songs & Stories', thumbnail: '' }
+        { id: 'UCbCmjCuTUZos6Inko4u57UQ', name: 'Cocomelon - Nursery Rhymes', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLRbdv3Di8paQyrgMF_VwFXPkhwVzcW59Vgo8dTsyw=s128-c-k-c0x00ffffff-no-rj' },
+        { id: 'UC2h-ucSvsjDMg8gqE2KoVyg', name: 'Super Simple Songs', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLSGzJceA7O2jO7C7HHaQv5y5U-y7Sg_rQe6kX5G=s128-c-k-c0x00ffffff-no-rj' },
+        { id: 'UCcdwLMPsaU2ezNSJU1nFoBQ', name: 'Pinkfong Baby Shark - Kids\' Songs & Stories', thumbnail: 'https://yt3.ggpht.com/ytc/AKedOLTkv3M_k-hSj5uV8t3y6jF_5_k_j5_k_j5_k=s128-c-k-c0x00ffffff-no-rj' }
       ]
     }
   ],
@@ -257,6 +257,8 @@ function init() {
 
 
   setupEventListeners();
+  // Auto-fetch missing icons from community stats or YouTube API
+  setTimeout(fetchMissingChannelIcons, 1500);
 }
 
 
@@ -699,44 +701,63 @@ function getSortedVideos(videos) {
 
 // --- Icon Auto-Fetch ---
 async function fetchMissingChannelIcons() {
-  if (!state.data.apiKey) return;
   const profile = getCurrentProfile();
-
   // Find channels without thumbnails
   const missingIcons = profile.channels.filter(c => !c.thumbnail);
+  if (missingIcons.length === 0) return;
 
-  if (missingIcons.length === 0) return; // All good
-
-  console.log(`Fetching icons for ${missingIcons.length} channels...`);
-
-  // YouTube API allows fetching up to 50 ids at once
-  const ids = missingIcons.map(c => c.id).join(',');
-  const url = `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`;
-
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
-
-    if (data.items) {
-      let updated = false;
-      data.items.forEach(item => {
-        const channel = profile.channels.find(c => c.id === item.id);
-        if (channel) {
-          channel.thumbnail = item.snippet.thumbnails.default?.url;
-          updated = true;
-        }
-      });
-
-      if (updated) {
-        saveLocalData();
-        renderChannelNav(); // Refresh nav to show new icons
-        console.log('Channel icons updated!');
-        if (state.accessToken) saveToDrive(); // Sync changes
+  // Option 1: Official YouTube API (if key exists)
+  if (state.data.apiKey) {
+    console.log(`Fetching icons via YouTube API for ${missingIcons.length} channels...`);
+    const ids = missingIcons.map(c => c.id).join(',');
+    const url = `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`;
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.items) {
+        let updated = false;
+        data.items.forEach(item => {
+          const channel = profile.channels.find(c => c.id === item.id);
+          if (channel) {
+            channel.thumbnail = item.snippet.thumbnails.default?.url;
+            updated = true;
+          }
+        });
+        if (updated) finalizeIconUpdate();
       }
+    } catch (e) {
+      console.warn('YouTube API icon fetch failed', e);
     }
-  } catch (e) {
-    console.warn('Failed to auto-fetch channel icons', e);
   }
+
+  // Option 2: Ranking API Fallback (Works for Lite Mode)
+  else {
+    console.log(`Fetching icons via Community Stats for ${missingIcons.length} channels...`);
+    try {
+      // We can use the existing Rankings list to look for matches
+      const response = await fetch(STATS_ENDPOINT + '?action=getRankings');
+      const data = await response.json();
+      if (data.channels) {
+        let updated = false;
+        missingIcons.forEach(missing => {
+          const match = data.channels.find(rank => rank.id === missing.id);
+          if (match && match.thumbnail) {
+            missing.thumbnail = match.thumbnail;
+            updated = true;
+          }
+        });
+        if (updated) finalizeIconUpdate();
+      }
+    } catch (e) {
+      console.warn('Community Stats icon fetch failed', e);
+    }
+  }
+}
+
+function finalizeIconUpdate() {
+  saveLocalData();
+  renderChannelNav();
+  if (state.accessToken) saveToDrive();
 }
 
 
@@ -1195,6 +1216,7 @@ function switchProfile(id) {
   updateProfileUI();
   renderChannelList();
   fetchAllVideos();
+  fetchMissingChannelIcons();
 }
 
 function editProfileName(id) {
