@@ -636,6 +636,8 @@ h1 {
   padding: 24px 28px;
   max-height: 70vh;
   overflow-y: auto;
+  background: #f8f9fa;
+  /* Light background to make blocks pop */
 }
 
 .settings-section {
