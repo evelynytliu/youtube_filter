@@ -954,63 +954,112 @@ async function fetchChannelVideos(channel) {
     }
   }
 
-  // Fetch Videos cost: 1 unit
-  // Increased maxResults to 20 to buffer for Shorts filtering
-  const plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=20&key=${state.data.apiKey}`;
+  // --- Smart Pagination for Shorts-heavy channels ---
+  // Strategy: Fetch first page. If filterShorts is on and too few long videos
+  // remain, fetch additional pages until we have enough or hit a limit.
+  // Cost: 2 units per extra page (1 playlistItems + 1 videos detail check).
+  // Most channels won't trigger extra pages, keeping quota usage low.
+  const MIN_DESIRED_VIDEOS = 5;  // Target minimum long videos per channel
+  const MAX_PAGES = 3;           // Safety cap: max pages to fetch (max 6 extra units)
+
+  let allFilteredVideos = [];
+  let nextPageToken = null;
+  let page = 0;
 
   try {
-    const plRes = await fetch(plUrl);
-    const plData = await plRes.json();
-
-    if (!plData.items) return [];
-
-    const rawItems = plData.items;
-
-    // --- Shorts Filtering (API Mode) ---
-    // We need to fetch 'contentDetails' to check duration. 
-    // This costs 1 extra unit per batch, but ensures accuracy.
-    const videoIds = rawItems.map(item => item.snippet.resourceId.videoId).join(',');
-    const detailsUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoIds}&key=${state.data.apiKey}`;
-
-    let allowedIds = new Set();
-
-    try {
-      const dRes = await fetch(detailsUrl);
-      const dData = await dRes.json();
-
-      if (dData.items) {
-        dData.items.forEach(v => {
-          const duration = parseDuration(v.contentDetails.duration);
-
-          // Filter: Updated for new YouTube Shorts policy (up to 3 mins)
-          // If duration > 180 seconds (3 mins), it's definitely NOT a Short.
-          if (duration > 180) {
-            allowedIds.add(v.id);
-          } else {
-            console.log(`Filtered Short: ${v.snippet?.title || v.id} (${duration}s)`);
-          }
-        });
+    do {
+      // Fetch Videos cost: 1 unit per page
+      let plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=20&key=${state.data.apiKey}`;
+      if (nextPageToken) {
+        plUrl += `&pageToken=${nextPageToken}`;
       }
-    } catch (err) {
-      console.warn('Failed to fetch video durations, skipping filter', err);
-      // Fallback: Allow all if detailed check fails
-      rawItems.forEach(item => allowedIds.add(item.snippet.resourceId.videoId));
+
+      const plRes = await fetch(plUrl);
+      const plData = await plRes.json();
+
+      if (!plData.items || plData.items.length === 0) break;
+
+      const rawItems = plData.items;
+      nextPageToken = plData.nextPageToken || null;
+      page++;
+
+      // --- Shorts Filtering (API Mode) ---
+      if (state.data.filterShorts) {
+        // Check duration to filter Shorts. Cost: 1 unit per batch.
+        const videoIds = rawItems.map(item => item.snippet.resourceId.videoId).join(',');
+        const detailsUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoIds}&key=${state.data.apiKey}`;
+
+        let allowedIds = new Set();
+
+        try {
+          const dRes = await fetch(detailsUrl);
+          const dData = await dRes.json();
+
+          if (dData.items) {
+            dData.items.forEach(v => {
+              const duration = parseDuration(v.contentDetails.duration);
+              // Filter: YouTube Shorts can be up to 3 mins
+              if (duration > 180) {
+                allowedIds.add(v.id);
+              } else {
+                console.log(`Filtered Short: ${v.snippet?.title || v.id} (${duration}s)`);
+              }
+            });
+          }
+        } catch (err) {
+          console.warn('Failed to fetch video durations, skipping filter', err);
+          // Fallback: Allow all if detailed check fails
+          rawItems.forEach(item => allowedIds.add(item.snippet.resourceId.videoId));
+        }
+
+        const pageVideos = rawItems
+          .filter(item => allowedIds.has(item.snippet.resourceId.videoId))
+          .map(item => ({
+            id: item.snippet.resourceId.videoId,
+            title: item.snippet.title,
+            thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium?.url,
+            channelTitle: item.snippet.channelTitle,
+            channelId: channel.id,
+            publishedAt: item.snippet.publishedAt
+          }));
+
+        allFilteredVideos.push(...pageVideos);
+
+        // Smart decision: Do we need more videos?
+        if (allFilteredVideos.length >= MIN_DESIRED_VIDEOS) {
+          // Got enough long videos, stop fetching
+          console.log(`[${channel.name}] Got ${allFilteredVideos.length} long videos in ${page} page(s) ✓`);
+          break;
+        }
+
+        if (page < MAX_PAGES && nextPageToken) {
+          // Not enough yet, fetch next page
+          console.log(`[${channel.name}] Only ${allFilteredVideos.length} long videos after page ${page}, fetching more...`);
+        }
+
+      } else {
+        // filterShorts is OFF: return all videos from first page, no pagination needed
+        return rawItems.map(item => ({
+          id: item.snippet.resourceId.videoId,
+          title: item.snippet.title,
+          thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium?.url,
+          channelTitle: item.snippet.channelTitle,
+          channelId: channel.id,
+          publishedAt: item.snippet.publishedAt
+        }));
+      }
+
+    } while (page < MAX_PAGES && nextPageToken);
+
+    if (allFilteredVideos.length < MIN_DESIRED_VIDEOS) {
+      console.warn(`[${channel.name}] Could only find ${allFilteredVideos.length} long videos after ${page} page(s)`);
     }
 
-    return rawItems
-      .filter(item => allowedIds.has(item.snippet.resourceId.videoId))
-      .map(item => ({
-        id: item.snippet.resourceId.videoId,
-        title: item.snippet.title,
-        thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium?.url,
-        channelTitle: item.snippet.channelTitle,
-        channelId: channel.id, // Store Channel ID
-        publishedAt: item.snippet.publishedAt
-      }));
+    return allFilteredVideos;
 
   } catch (e) {
     console.error(`Failed to fetch videos for ${channel.id}`, e);
-    return [];
+    return allFilteredVideos.length > 0 ? allFilteredVideos : [];
   }
 }
 
