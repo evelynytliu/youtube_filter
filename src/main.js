@@ -169,7 +169,8 @@ let state = {
   videos: [],
   tokenClient: null,
   accessToken: null,
-  lang: localStorage.getItem(STORAGE_KEY_LANG) || (navigator.language?.startsWith('zh') ? 'zh' : 'en')
+  lang: localStorage.getItem(STORAGE_KEY_LANG) || (navigator.language?.startsWith('zh') ? 'zh' : 'en'),
+  channelNextPageTokens: {} // Track pagination per channel for "Load More"
 };
 
 // --- i18n Logic ---
@@ -740,6 +741,7 @@ async function fetchAllVideos(forceRefresh = false) {
 
   try {
     let checkVideos = [];
+    state.channelNextPageTokens = {}; // Reset pagination tokens for fresh fetch
 
     if (useLiteMode) {
       // --- Lite Mode (RSS) with Progressive Rendering ---
@@ -932,7 +934,7 @@ async function fetchChannelRSS(channel) {
   return [];
 }
 
-async function fetchChannelVideos(channel) {
+async function fetchChannelVideos(channel, startPageToken = null) {
   // Optimization: If we already have uploadsId, skip first call
   let uploadsPlaylistId = channel.uploadsId;
 
@@ -961,9 +963,10 @@ async function fetchChannelVideos(channel) {
   // Most channels won't trigger extra pages, keeping quota usage low.
   const MIN_DESIRED_VIDEOS = 5;  // Target minimum long videos per channel
   const MAX_PAGES = 3;           // Safety cap: max pages to fetch (max 6 extra units)
+  const isLoadMore = !!startPageToken; // If called with a token, this is a "Load More" request
 
   let allFilteredVideos = [];
-  let nextPageToken = null;
+  let nextPageToken = startPageToken || null;
   let page = 0;
 
   try {
@@ -1051,9 +1054,12 @@ async function fetchChannelVideos(channel) {
 
     } while (page < MAX_PAGES && nextPageToken);
 
-    if (allFilteredVideos.length < MIN_DESIRED_VIDEOS) {
+    if (allFilteredVideos.length < MIN_DESIRED_VIDEOS && !isLoadMore) {
       console.warn(`[${channel.name}] Could only find ${allFilteredVideos.length} long videos after ${page} page(s)`);
     }
+
+    // Save nextPageToken for "Load More" feature
+    state.channelNextPageTokens[channel.id] = nextPageToken || null;
 
     return allFilteredVideos;
 
@@ -1600,6 +1606,80 @@ function renderVideos() {
     `;
     videoContainer.appendChild(card);
   });
+
+  // --- "Load More" Button ---
+  // Show only when: viewing a specific channel + API mode + has next page token
+  if (state.activeChannelId && state.data.apiKey) {
+    const nextToken = state.channelNextPageTokens[state.activeChannelId];
+    if (nextToken) {
+      const loadMoreContainer = document.createElement('div');
+      loadMoreContainer.className = 'load-more-container';
+      loadMoreContainer.innerHTML = `
+        <button class="load-more-btn" id="load-more-btn">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="7 13 12 18 17 13"></polyline>
+            <polyline points="7 6 12 11 17 6"></polyline>
+          </svg>
+          ${t('load_more')}
+        </button>
+        <p class="load-more-hint">${t('load_more_hint')}</p>
+      `;
+      videoContainer.appendChild(loadMoreContainer);
+
+      document.getElementById('load-more-btn').onclick = () => loadMoreChannelVideos(state.activeChannelId);
+    }
+  }
+}
+
+// --- Load More Videos for a Specific Channel ---
+async function loadMoreChannelVideos(channelId) {
+  const channel = getCurrentProfile().channels.find(c => c.id === channelId);
+  if (!channel) return;
+
+  const nextToken = state.channelNextPageTokens[channelId];
+  if (!nextToken) return;
+
+  // Update button to loading state
+  const btn = document.getElementById('load-more-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `
+      <div class="spinner" style="width:20px;height:20px;border-width:2px;"></div>
+      ${t('loading_more')}
+    `;
+  }
+
+  try {
+    const newVideos = await fetchChannelVideos(channel, nextToken);
+
+    if (newVideos.length > 0) {
+      // Add new videos (avoid duplicates)
+      const existingIds = new Set(state.videos.map(v => v.id));
+      const uniqueNew = newVideos.filter(v => !existingIds.has(v.id));
+      state.videos.push(...uniqueNew);
+
+      // Update cache
+      const profile = getCurrentProfile();
+      const cacheKey = `safetube_cache_${profile.id}`;
+      localStorage.setItem(cacheKey, JSON.stringify({
+        timestamp: Date.now(),
+        videos: state.videos
+      }));
+
+      console.log(`Loaded ${uniqueNew.length} more videos for ${channel.name}`);
+    }
+
+    // Re-render to show new videos + updated button state
+    renderVideos();
+
+  } catch (e) {
+    console.error('Load more failed:', e);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = t('load_more_error');
+    }
+  }
 }
 
 function renderChannelList() {

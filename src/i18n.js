@@ -92,5 +92,9 @@ export const translations = {
     lite_mode_hint: { en: "No API key needed! Using public feeds.", zh: "不需要 API 金鑰！使用公開資料源。" },
     no_videos_yet: { en: "Videos are loading...", zh: "影片載入中..." },
     lite_mode_slow_hint: { en: "Free Mode uses public feeds which may be slow. For instant loading, add a YouTube API Key in Settings ⚙️", zh: "免費模式使用公開資料源，速度可能較慢。如需即時載入，請在設定 ⚙️ 中新增 YouTube API 金鑰" },
-    logout_success: { en: "Logged out successfully.", zh: "已成功登出。" }
+    logout_success: { en: "Logged out successfully.", zh: "已成功登出。" },
+    load_more: { en: "Load More Videos", zh: "載入更多影片" },
+    loading_more: { en: "Loading...", zh: "載入中..." },
+    load_more_error: { en: "Failed to load, tap to retry", zh: "載入失敗，點擊重試" },
+    load_more_hint: { en: "Costs ~2 API units per click", zh: "每次點擊約消耗 2 個 API 單位" }
 };
