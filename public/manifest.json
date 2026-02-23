@@ -1,0 +1,20 @@
+{
+  "name": "KiddoLens",
+  "short_name": "KiddoLens",
+  "description": "讓孩子只看你選好的 YouTube 頻道",
+  "start_url": "/kiddolens-for-youtube/",
+  "scope": "/kiddolens-for-youtube/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fcefee",
+  "theme_color": "#ff6b9d",
+  "lang": "zh-TW",
+  "icons": [
+    {
+      "src": "/kiddolens-for-youtube/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

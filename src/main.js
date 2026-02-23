@@ -1,5 +1,14 @@
 // import './style.css'
 
+// Register Service Worker for PWA
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/kiddolens-for-youtube/sw.js', { scope: '/kiddolens-for-youtube/' })
+      .then(() => console.log('SW registered'))
+      .catch((err) => console.warn('SW registration failed:', err));
+  });
+}
+
 // Configuration & State
 const STORAGE_KEY_API = 'safetube_api_key';
 const STORAGE_KEY_DATA = 'safetube_data';
@@ -281,6 +290,10 @@ function updateLanguageUI() {
     btn.classList.toggle('active', btn.dataset.lang === state.lang);
   });
 
+  // Footer
+  const footerText = document.getElementById('footer-text');
+  if (footerText) footerText.textContent = t('footer_made_by');
+
   // Re-render dynamic content
   renderVideos();
   renderChannelList();
@@ -445,6 +458,7 @@ function startApp() {
   }
 
   // Always run: UI updates & video fetch
+  updateLanguageUI();
   updateProfileUI();
   updateSyncUI();
   fetchMissingChannelIcons();

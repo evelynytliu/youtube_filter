@@ -1,6 +1,6 @@
 export const translations = {
-    app_title: { en: "SafeTube Kids", zh: "SafeTube Kids" },
-    app_subtitle: { en: "Parent-Approved Watchlist", zh: "家長核准觀看清單" },
+    app_title: { en: "KiddoLens", zh: "KiddoLens" },
+    app_subtitle: { en: "Your Kids' YouTube, Your Rules", zh: "讓孩子只看你選好的 YouTube 頻道" },
     refresh_videos: { en: "Refresh Videos", zh: "重新整理影片" },
     parent_settings: { en: "Parent Settings", zh: "家長設定" },
     all_videos: { en: "All Videos", zh: "所有影片" },
@@ -28,7 +28,7 @@ export const translations = {
     api_help_step2: { en: "Create a New Project.", zh: "建立新專案。" },
     api_help_step3: { en: "Search for \"YouTube Data API v3\" and enable it.", zh: "搜尋 \"YouTube Data API v3\" 並啟用它。" },
     // Onboarding Wizard
-    welcome_title: { en: "Welcome to SafeTube! 🌟", zh: "歡迎使用 SafeTube！🌟" },
+    welcome_title: { en: "Welcome to KiddoLens! 🌟", zh: "歡迎使用 KiddoLens！🌟" },
     welcome_desc: { en: "Let's create a safe space for your child.", zh: "讓我們為您的孩子建立一個安全的觀看空間。" },
     step1_label: { en: "Child's Name:", zh: "孩子的名字：" },
     step1_placeholder: { en: "e.g. Joy", zh: "例如：小寶" },
@@ -83,7 +83,7 @@ export const translations = {
     rename_prompt: { en: "Enter new name for {name}", zh: "輸入 {name} 的新名稱" },
     current_badge: { en: "Current", zh: "目前" },
     remove_channel: { en: "Remove Channel", zh: "移除頻道" },
-    onboarding_title: { en: "👋 Welcome to SafeTube Kids!", zh: "👋 歡迎使用 SafeTube Kids！" },
+    onboarding_title: { en: "👋 Welcome to KiddoLens!", zh: "👋 歡迎使用 KiddoLens 親子視界！" },
     onboarding_text: { en: "Tap ⚙️ Settings to set up your child's name and channels. Add a free YouTube API Key to unlock search, unlimited history, and faster sync!", zh: "點擊 ⚙️ 設定來設定孩子的名字和頻道。輸入免費的 YouTube API 金鑰可解鎖搜尋、無限歷史紀錄和更快的同步速度！" },
     onboarding_btn: { en: "Go to Settings", zh: "前往設定" },
     onboarding_dismiss: { en: "Got it!", zh: "知道了！" },
@@ -100,5 +100,6 @@ export const translations = {
     watch_on_youtube: { en: "Watch on YouTube", zh: "在 YouTube 上觀看" },
     lite_mode_more_hint: { en: "Lite Mode limits videos. Use Pro Mode for more.", zh: "輕量模式影片數量有限。使用專業模式可看更多。" },
     video_ended: { en: "Video finished!", zh: "影片播放完畢！" },
-    watch_again: { en: "Watch Again", zh: "再看一次" }
+    watch_again: { en: "Watch Again", zh: "再看一次" },
+    footer_made_by: { en: "Made with ❤️ by ", zh: "製作人員 ❤️ " }
 };

@@ -2,10 +2,28 @@
 <html lang="en">
 
 <head>
+  <!-- Google Tag Manager -->
+  <script>(function (w, d, s, l, i) {
+      w[l] = w[l] || []; w[l].push({
+        'gtm.start':
+          new Date().getTime(), event: 'gtm.js'
+      }); var f = d.getElementsByTagName(s)[0],
+        j = d.createElement(s), dl = l != 'dataLayer' ? '&l=' + l : ''; j.async = true; j.src =
+          'https://www.googletagmanager.com/gtm.js?id=' + i + dl; f.parentNode.insertBefore(j, f);
+    })(window, document, 'script', 'dataLayer', 'GTM-WX5VQK2V');</script>
+  <!-- End Google Tag Manager -->
   <meta charset="UTF-8" />
-  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SafeTube Kids | Ad-Free Viewing</title>
+  <link rel="icon" type="image/svg+xml" href="/kiddolens-for-youtube/icons/icon.svg" />
+  <link rel="manifest" href="/kiddolens-for-youtube/manifest.json" />
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="KiddoLens" />
+  <link rel="apple-touch-icon" href="/kiddolens-for-youtube/icons/icon.svg" />
+  <!-- Theme color for browser chrome -->
+  <meta name="theme-color" content="#ff6b9d" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>KiddoLens | 讓孩子只看你選好的 YouTube 頻道</title>
   <!-- Fonts: Quicksand for UI, Nunito for Headers -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -25,12 +43,16 @@
 </head>
 
 <body>
+  <!-- Google Tag Manager (noscript) -->
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-WX5VQK2V" height="0" width="0"
+      style="display:none;visibility:hidden"></iframe></noscript>
+  <!-- End Google Tag Manager (noscript) -->
   <div id="app">
     <!-- Header -->
     <header class="app-header glass">
       <div class="logo-container">
         <span class="logo-icon">🎈</span>
-        <h1 class="logo-text">SafeTube</h1>
+        <h1 class="logo-text">KiddoLens</h1>
       </div>
 
       <div id="profile-selector" class="profile-selector hidden">
@@ -326,7 +348,13 @@
         <button id="gate-submit" class="primary-btn">Unlock</button>
       </div>
     </div>
-
+    <!-- Footer -->
+    <footer class="app-footer">
+      <div class="footer-content">
+        <span id="footer-text">Made with ❤️ by </span>
+        <a href="https://evelynytliu.github.io/" target="_blank" rel="noopener noreferrer">Evelyn Liu</a>
+      </div>
+    </footer>
   </div>
   <script type="module" src="./src/main.js"></script>
   <!-- Add YouTube Iframe API -->
