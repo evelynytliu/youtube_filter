@@ -6,8 +6,8 @@
   "scope": "/kiddolens-for-youtube/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#fcefee",
-  "theme_color": "#ff6b9d",
+  "background_color": "#f4f7ff",
+  "theme_color": "#355DCE",
   "lang": "zh-TW",
   "icons": [
     {

@@ -13,6 +13,9 @@ if ('serviceWorker' in navigator) {
 const STORAGE_KEY_API = 'safetube_api_key';
 const STORAGE_KEY_DATA = 'safetube_data';
 const STORAGE_KEY_STATS = 'safetube_stats_meta';
+const STORAGE_KEY_WATCH_HISTORY = 'safetube_watch_history_'; // Per-profile: + profileId
+const INTEREST_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // 14 days in ms
+const MAX_WATCH_HISTORY = 50;
 // Scopes: Drive access + User Info for display
 const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
 const STATS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyryKTFoTom_fhoJ6ImvnfbYUn8wtKABPvMMLX_g3OP7yiBLj14m2kL0EDEOJVKDjtA6g/exec';
@@ -71,28 +74,18 @@ async function saveToDrive() {
       const errText = await res.text();
       throw new Error(`HTTP ${res.status}: ${errText}`);
     }
-    console.log('Saved to Drive (Visible File)');
-
-    // Optional: Update a status indicator if visible
-    const apiStatus = document.getElementById('api-status');
-    if (apiStatus && apiStatus.classList.contains('show')) {
-      // Append cloud icon to existing toast if it's showing
-      apiStatus.textContent += t('save_drive_success');
-    }
+    console.log('Saved to Drive.');
+    state.lastSyncedAt = new Date().toISOString();
+    updateLastSyncedUI();
 
   } catch (e) {
     console.error('Save to Drive failed', e);
-    // If permission error, suggest re-login
     if (e.message.includes('401') || e.message.includes('403')) {
       console.warn('Sync Error: Permission Denied. Token likely expired.');
       state.accessToken = null;
-      const loginBtn = document.getElementById('google-login-btn');
-      if (loginBtn) {
-        loginBtn.textContent = 'Login with Google to Sync';
-        loginBtn.disabled = false;
-      }
+      updateSyncUI();
     } else {
-      console.warn(t('save_drive_failed', { message: e.message }));
+      showSyncToast(t('save_drive_failed', { message: e.message }), 'warning');
     }
   }
 }
@@ -123,6 +116,111 @@ async function downloadConfigFile(fileId) {
     return null;
   }
 }
+
+// --- Sync Helpers ---
+
+/** Returns true if data contains at least one profile with at least one channel */
+function hasMeaningfulData(data) {
+  if (!data || !Array.isArray(data.profiles)) return false;
+  return data.profiles.some(p => p.channels && p.channels.length > 0);
+}
+
+/** Show a toast in the settings footer (visible whenever settings panel is open) */
+function showSyncToast(msg, type = 'success') {
+  const el = document.getElementById('api-status');
+  if (!el) return;
+  el.className = `status-toast ${type} show`;
+  el.textContent = msg;
+  clearTimeout(el._toastTimer);
+  el._toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+}
+
+/** Returns a human-readable "X ago" string from an ISO timestamp */
+function formatSyncTime(isoString) {
+  if (!isoString) return '';
+  const diff = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (diff < 60) return t('sync_just_now');
+  if (diff < 3600) return t('sync_minutes_ago', { n: Math.floor(diff / 60) });
+  return t('sync_hours_ago', { n: Math.floor(diff / 3600) });
+}
+
+/** Updates the "Last synced" indicator in the sync section */
+function updateLastSyncedUI() {
+  const el = document.getElementById('sync-last-time');
+  if (!el) return;
+  if (state.lastSyncedAt) {
+    el.textContent = t('sync_last_synced', { time: formatSyncTime(state.lastSyncedAt) });
+    el.style.display = 'block';
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+/**
+ * Applies cloud data to local state without triggering an upload loop.
+ * Sets isApplyingCloudData so saveLocalData() skips the Drive call.
+ */
+function applyCloudData(driveConfig) {
+  state.isApplyingCloudData = true;
+  state.data = driveConfig;
+  saveLocalData(); // persists to localStorage only (flag blocks Drive upload)
+  state.isApplyingCloudData = false;
+  updateProfileUI();
+  renderChannelList();
+  if (state.data.apiKey) {
+    fetchAllVideos(true);
+    setTimeout(fetchMissingChannelIcons, 1000);
+  }
+}
+
+/**
+ * Shows a conflict resolution dialog when both sides have real data.
+ * Returns a Promise that resolves to 'local' or 'cloud'.
+ */
+function showSyncConflictDialog(localData, cloudData) {
+  return new Promise((resolve) => {
+    const countChannels = (d) => (d.profiles || []).reduce((s, p) => s + (p.channels?.length || 0), 0);
+    const countProfiles = (d) => (d.profiles || []).length;
+    const formatDate = (iso) => {
+      if (!iso) return '—';
+      try {
+        return new Date(iso).toLocaleString(state.lang === 'zh' ? 'zh-TW' : 'en-US',
+          { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      } catch { return iso; }
+    };
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay sync-conflict-overlay';
+    modal.innerHTML = `
+      <div class="modal-content glass sync-conflict-modal">
+        <h3>☁️ ${t('sync_conflict_title')}</h3>
+        <p class="small-text" style="margin-bottom:16px">${t('sync_conflict_desc')}</p>
+        <div class="sync-conflict-cards">
+          <div class="sync-card sync-card--local">
+            <div class="sync-card__header">${t('sync_this_device')}</div>
+            <div class="sync-card__stat">${t('sync_conflict_profiles', { count: countProfiles(localData) })}</div>
+            <div class="sync-card__stat">${t('sync_conflict_channels', { count: countChannels(localData) })}</div>
+            <div class="sync-card__date">${t('sync_conflict_modified', { date: formatDate(localData.lastUpdated) })}</div>
+            <button class="primary-btn sync-card__btn" id="sync-choose-local">${t('sync_use_local')}</button>
+          </div>
+          <div class="sync-vs">VS</div>
+          <div class="sync-card sync-card--cloud">
+            <div class="sync-card__header">${t('sync_cloud_label')}</div>
+            <div class="sync-card__stat">${t('sync_conflict_profiles', { count: countProfiles(cloudData) })}</div>
+            <div class="sync-card__stat">${t('sync_conflict_channels', { count: countChannels(cloudData) })}</div>
+            <div class="sync-card__date">${t('sync_conflict_modified', { date: formatDate(cloudData.lastUpdated) })}</div>
+            <button class="secondary-btn sync-card__btn" id="sync-choose-cloud">${t('sync_use_cloud')}</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    document.getElementById('sync-choose-local').onclick = () => { modal.remove(); resolve('local'); };
+    document.getElementById('sync-choose-cloud').onclick  = () => { modal.remove(); resolve('cloud');  };
+  });
+}
+
 // Old implementations removed. Using the new ones at the top.
 const GOOGLE_CLIENT_ID = '959694478718-pksctjg2pbmtd1fnvp9geha2imqbi72j.apps.googleusercontent.com';
 
@@ -179,7 +277,11 @@ let state = {
   tokenClient: null,
   accessToken: null,
   lang: localStorage.getItem(STORAGE_KEY_LANG) || (navigator.language?.startsWith('zh') ? 'zh' : 'en'),
-  channelNextPageTokens: {} // Track pagination per channel for "Load More"
+  channelNextPageTokens: {}, // Track pagination per channel for "Load More"
+  currentSort: 'shuffle',    // Default to shuffle
+  isApplyingCloudData: false, // Prevents save-loop when applying downloaded cloud data
+  driveSaveTimer: null,       // Debounce timer for background cloud saves
+  lastSyncedAt: null          // Timestamp of last successful cloud sync
 };
 
 // --- i18n Logic ---
@@ -395,6 +497,8 @@ function updateSyncUI() {
       if (typeof startApp === 'function') startApp();
     }
 
+    updateLastSyncedUI();
+
   } else {
     // Logged Out State
     loginBtn.style.display = 'block';
@@ -430,7 +534,7 @@ function handleLogout() {
     } catch (e) { console.warn('Revoke failed', e); }
   }
   updateSyncUI();
-  alert(t('logout_success') || 'Logged out successfully.');
+  showSyncToast(t('logout_success') || 'Logged out successfully.');
 }
 
 // --- App Startup ---
@@ -572,8 +676,11 @@ function loadLocalData() {
 function saveLocalData() {
   state.data.lastUpdated = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY_DATA, JSON.stringify(state.data));
-  // Sync if logged in
-  if (state.accessToken) saveToDrive();
+  // Auto-sync to cloud with debounce — skip if we're currently applying cloud data (prevents save loop)
+  if (state.accessToken && !state.isApplyingCloudData) {
+    clearTimeout(state.driveSaveTimer);
+    state.driveSaveTimer = setTimeout(() => saveToDrive(), 3000);
+  }
 }
 
 function getCurrentProfile() {
@@ -641,53 +748,93 @@ function initializeGSI(clientId) {
 async function syncWithDrive() {
   const fileId = await findConfigFile();
 
+  // ── Case 1: No cloud backup yet → first-time upload ──────────────────────
   if (!fileId) {
-    console.log('No config file found on Drive, creating new...');
-    await saveToDrive(); // First time sync (Upload)
-    alert(t('save_drive_success'));
+    console.log('Sync: No cloud file found — uploading local data for the first time.');
+    await saveToDrive();
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_backed_up'));
+    updateLastSyncedUI();
     return;
   }
 
   const driveConfig = await downloadConfigFile(fileId);
-  if (!driveConfig) {
-    // File exists but empty/corrupt? Try saving local.
+
+  // ── Case 2: Cloud file exists but is empty / corrupt → upload local ──────
+  if (!driveConfig || !Array.isArray(driveConfig.profiles)) {
+    console.log('Sync: Cloud file is invalid — re-uploading local data.');
+    await saveToDrive();
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_backed_up'));
+    updateLastSyncedUI();
+    return;
+  }
+
+  const localHasData = hasMeaningfulData(state.data);
+  const cloudHasData = hasMeaningfulData(driveConfig);
+
+  // ── Case 3: Local is empty, cloud has real data → silently restore ────────
+  if (!localHasData && cloudHasData) {
+    console.log('Sync: Local has no channels — restoring from cloud.');
+    applyCloudData(driveConfig);
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_restored'));
+    updateLastSyncedUI();
+    return;
+  }
+
+  // ── Case 4: Cloud is empty, local has real data → push to cloud ──────────
+  if (localHasData && !cloudHasData) {
+    console.log('Sync: Cloud has no channels — uploading local data.');
+    await saveToDrive();
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_backed_up'));
+    updateLastSyncedUI();
+    return;
+  }
+
+  // ── Case 5: Neither side has meaningful data ──────────────────────────────
+  if (!localHasData && !cloudHasData) {
     await saveToDrive();
     return;
   }
 
-  // Compare Timestamps
+  // ── Case 6: Both sides have real data — compare timestamps ───────────────
   const localTime = state.data.lastUpdated ? new Date(state.data.lastUpdated).getTime() : 0;
   const cloudTime = driveConfig.lastUpdated ? new Date(driveConfig.lastUpdated).getTime() : 0;
+  console.log(`Sync: Local (${state.data.lastUpdated}) vs Cloud (${driveConfig.lastUpdated})`);
 
-  console.log(`Sync Check: Local (${state.data.lastUpdated}) vs Cloud (${driveConfig.lastUpdated})`);
+  if (localTime === cloudTime) {
+    console.log('Sync: Already up to date.');
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_uptodate'));
+    updateLastSyncedUI();
+    return;
+  }
 
   if (localTime > cloudTime) {
-    // Local is newer: Upload
-    console.log('Local is newer, uploading to Drive...');
+    // Local is newer → push to cloud (user just made changes on this device)
+    console.log('Sync: Local is newer — uploading to cloud.');
     await saveToDrive();
-    alert(t('save_drive_success')); // "Saved to Drive"
-
-  } else if (cloudTime > localTime) {
-    // Cloud is newer: Download
-    console.log('Cloud is newer, downloading from Drive...');
-    if (driveConfig.profiles && Array.isArray(driveConfig.profiles)) {
-      state.data = driveConfig;
-      saveLocalData(); // Save to localStorage
-      updateProfileUI();
-      renderChannelList();
-
-      if (state.data.apiKey) {
-        fetchAllVideos(true);
-        setTimeout(fetchMissingChannelIcons, 1000);
-      }
-      alert(t('loaded_from_drive')); // "Loaded from Drive"
-    }
-
-  } else {
-    // Timestamps equal or no meaningful diff
-    console.log('Sync: Data is up to date.');
-    alert(t('sync_complete')); // New key needed
+    state.lastSyncedAt = new Date().toISOString();
+    showSyncToast(t('sync_backed_up'));
+    updateLastSyncedUI();
+    return;
   }
+
+  // Cloud is newer → ask user which version to keep
+  console.log('Sync: Cloud is newer — showing conflict dialog.');
+  const choice = await showSyncConflictDialog(state.data, driveConfig);
+  if (choice === 'cloud') {
+    applyCloudData(driveConfig);
+    showSyncToast(t('sync_restored'));
+  } else {
+    // User chose to keep local → push it to cloud
+    await saveToDrive();
+    showSyncToast(t('sync_backed_up'));
+  }
+  state.lastSyncedAt = new Date().toISOString();
+  updateLastSyncedUI();
 }
 
 // Old implementations removed. Using the new ones at the top.
@@ -737,7 +884,7 @@ async function fetchAllVideos(forceRefresh = false) {
           console.log('Using cached videos (filtered)');
           state.videos = validVideos;
           state.activeChannelId = preservedChannelId;
-          state.currentSort = 'newest';
+          state.currentSort = 'shuffle';
           renderChannelNav();
           updateSortUI();
           renderVideos();
@@ -795,7 +942,7 @@ async function fetchAllVideos(forceRefresh = false) {
 
             // Progressive render
             state.activeChannelId = preservedChannelId;
-            state.currentSort = 'newest';
+            state.currentSort = 'shuffle';
             renderChannelNav();
             updateSortUI();
             renderVideos();
@@ -857,7 +1004,7 @@ async function fetchAllVideos(forceRefresh = false) {
     if (!useLiteMode) saveLocalData();
 
     state.activeChannelId = preservedChannelId;
-    state.currentSort = 'newest';
+    state.currentSort = 'shuffle';
 
     renderChannelNav();
     updateSortUI();
@@ -1169,6 +1316,106 @@ function updateSortUI() {
   });
 }
 
+// --- Watch History & Interest Scoring ---
+
+function recordWatch(video) {
+  const profile = getCurrentProfile();
+  if (!profile) return;
+  const key = STORAGE_KEY_WATCH_HISTORY + profile.id;
+  const history = JSON.parse(localStorage.getItem(key) || '[]');
+  history.unshift({
+    videoId: video.id,
+    title: video.title,
+    thumbnail: video.thumbnail,
+    channelId: video.channelId,
+    channelTitle: video.channelTitle,
+    watchedAt: Date.now()
+  });
+  const cutoff = Date.now() - INTEREST_WINDOW_MS;
+  const trimmed = history.filter(h => h.watchedAt > cutoff).slice(0, MAX_WATCH_HISTORY);
+  localStorage.setItem(key, JSON.stringify(trimmed));
+}
+
+function getChannelInterestScores(profileId) {
+  const key = STORAGE_KEY_WATCH_HISTORY + profileId;
+  const history = JSON.parse(localStorage.getItem(key) || '[]');
+  const scores = {};
+  const now = Date.now();
+  history.forEach(({ channelId, watchedAt }) => {
+    const daysAgo = (now - watchedAt) / 86400000;
+    if (!scores[channelId]) scores[channelId] = 0;
+    if (daysAgo < 3)       scores[channelId] += 3;
+    else if (daysAgo < 7)  scores[channelId] += 2;
+    else                   scores[channelId] += 1;
+  });
+  return scores;
+}
+
+// --- Smart Interleaving Algorithm ---
+// Ensures channel diversity (max 2 consecutive from same channel) while
+// prioritising channels the child has recently shown interest in.
+
+function applySmartInterleaving(videos) {
+  const profile = getCurrentProfile();
+  const interestScores = profile ? getChannelInterestScores(profile.id) : {};
+
+  // Group videos by channel, sort each group newest-first
+  const byChannel = {};
+  videos.forEach(v => {
+    if (!byChannel[v.channelId]) byChannel[v.channelId] = [];
+    byChannel[v.channelId].push(v);
+  });
+  for (const id in byChannel) {
+    byChannel[id].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+  }
+
+  // Base score 1 ensures every channel gets a fair chance even with no watch history
+  const effectiveScores = {};
+  for (const id in byChannel) {
+    effectiveScores[id] = 1 + (interestScores[id] || 0);
+  }
+
+  const result = [];
+  const queues = {};
+  for (const id in byChannel) queues[id] = [...byChannel[id]];
+
+  let lastChannelId = null;
+  let consecutiveCount = 0;
+  const MAX_CONSECUTIVE = 2;
+
+  while (Object.keys(queues).length > 0) {
+    const available = Object.keys(queues);
+
+    // Avoid picking the same channel more than MAX_CONSECUTIVE times in a row
+    let eligible = available;
+    if (lastChannelId && consecutiveCount >= MAX_CONSECUTIVE) {
+      const others = available.filter(id => id !== lastChannelId);
+      if (others.length > 0) eligible = others;
+    }
+
+    // Weighted random selection
+    const totalScore = eligible.reduce((sum, id) => sum + effectiveScores[id], 0);
+    let rand = Math.random() * totalScore;
+    let selected = eligible[0];
+    for (const id of eligible) {
+      rand -= effectiveScores[id];
+      if (rand <= 0) { selected = id; break; }
+    }
+
+    result.push(queues[selected].shift());
+    if (queues[selected].length === 0) delete queues[selected];
+
+    if (selected === lastChannelId) {
+      consecutiveCount++;
+    } else {
+      lastChannelId = selected;
+      consecutiveCount = 1;
+    }
+  }
+
+  return result;
+}
+
 function getSortedVideos(videos) {
   const v = [...videos]; // Copy array
   if (state.currentSort === 'newest') {
@@ -1176,12 +1423,8 @@ function getSortedVideos(videos) {
   } else if (state.currentSort === 'oldest') {
     return v.sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt));
   } else if (state.currentSort === 'shuffle') {
-    // Fisher-Yates Shuffle
-    for (let i = v.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [v[i], v[j]] = [v[j], v[i]];
-    }
-    return v;
+    // Smart interleaving: balances channel diversity with personalised interest scoring
+    return applySmartInterleaving(v);
   }
   return v;
 }
@@ -1859,6 +2102,8 @@ function renderChannelList() {
 let activeYTPlayer = null;
 
 function openPlayer(video) {
+  recordWatch(video);
+
   const playerContainer = document.getElementById('youtube-player');
   playerContainer.innerHTML = '';
   document.querySelector('.video-ended-overlay')?.remove();

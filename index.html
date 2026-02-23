@@ -13,15 +13,15 @@
     })(window, document, 'script', 'dataLayer', 'GTM-WX5VQK2V');</script>
   <!-- End Google Tag Manager -->
   <meta charset="UTF-8" />
-  <link rel="icon" type="image/svg+xml" href="/kiddolens-for-youtube/icons/icon.svg" />
+  <link rel="icon" type="image/svg+xml" href="./logo.svg" />
   <link rel="manifest" href="/kiddolens-for-youtube/manifest.json" />
   <!-- iOS PWA -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="KiddoLens" />
-  <link rel="apple-touch-icon" href="/kiddolens-for-youtube/icons/icon.svg" />
+  <link rel="apple-touch-icon" href="./logo.svg" />
   <!-- Theme color for browser chrome -->
-  <meta name="theme-color" content="#ff6b9d" />
+  <meta name="theme-color" content="#355DCE" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>KiddoLens | 讓孩子只看你選好的 YouTube 頻道</title>
   <!-- Fonts: Quicksand for UI, Nunito for Headers -->
@@ -34,9 +34,8 @@
     body {
       margin: 0;
       font-family: 'Quicksand', sans-serif;
-      background-color: #fcefee;
-      /* Soft pastel pink/white */
-      color: #333;
+      background-color: #f4f7ff;
+      color: #1a2340;
     }
   </style>
   <link rel="stylesheet" href="./src/style.css">
@@ -51,7 +50,7 @@
     <!-- Header -->
     <header class="app-header glass">
       <div class="logo-container">
-        <span class="logo-icon">🎈</span>
+        <img src="./logo.svg" alt="KiddoLens Logo" class="logo-img" />
         <h1 class="logo-text">KiddoLens</h1>
       </div>
 
@@ -194,6 +193,7 @@
               style="display:none; margin-top: 10px; width: 100%;">
               Logout
             </button>
+            <div id="sync-last-time"></div>
           </section>
 
           <section class="settings-section">
