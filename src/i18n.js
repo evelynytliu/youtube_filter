@@ -61,7 +61,7 @@ export const translations = {
     content_preferences: { en: "Content Preferences", zh: "內容偏好" },
     filter_shorts: { en: "Filter YouTube Shorts", zh: "過濾 YouTube Shorts 短片" },
     lite_filter_desc: { en: "Lite Mode: Hides videos with '#shorts' in the title.", zh: "輕量模式：隱藏標題中包含 '#shorts' 的影片。" },
-    pro_filter_desc: { en: "Pro Mode: Hides all videos under 3 mins (more accurate).", zh: "專業模式：隱藏 3 分鐘以下的影片（準確度更高）。" },
+    pro_filter_desc: { en: "Pro Mode: Hides videos under 90 seconds using real duration data.", zh: "專業模式：使用實際片長資料，隱藏 90 秒以下的影片。" },
     participate_ranking: { en: "Participate in Ranking (Anonymous)", zh: "參與排行 (匿名)" },
     ranking_desc: { en: "Help the community discover safe channels! We only share channel names (no personal data).", zh: "幫助社群發現安全頻道！我們僅分享頻道名稱（不含個人資料）。" },
     google_sync: { en: "Google Sync", zh: "Google 同步" },
@@ -96,5 +96,9 @@ export const translations = {
     load_more: { en: "Load More Videos", zh: "載入更多影片" },
     loading_more: { en: "Loading...", zh: "載入中..." },
     load_more_error: { en: "Failed to load, tap to retry", zh: "載入失敗，點擊重試" },
-    load_more_hint: { en: "Costs ~2 API units per click", zh: "每次點擊約消耗 2 個 API 單位" }
+    load_more_hint: { en: "Costs ~2 API units per click", zh: "每次點擊約消耗 2 個 API 單位" },
+    watch_on_youtube: { en: "Watch on YouTube", zh: "在 YouTube 上觀看" },
+    lite_mode_more_hint: { en: "Lite Mode limits videos. Use Pro Mode for more.", zh: "輕量模式影片數量有限。使用專業模式可看更多。" },
+    video_ended: { en: "Video finished!", zh: "影片播放完畢！" },
+    watch_again: { en: "Watch Again", zh: "再看一次" }
 };

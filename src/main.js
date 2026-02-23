@@ -435,7 +435,6 @@ function startApp() {
 
     setupEventListeners();
     setupDangerZoneListener();
-    setupSearch();
 
     // Initialize GSI if not already active
     const clientId = (typeof GOOGLE_CLIENT_ID !== 'undefined' && GOOGLE_CLIENT_ID !== 'YOUR_GOOGLE_CLIENT_ID_HERE')
@@ -687,6 +686,7 @@ const CACHE_DURATION = 1000 * 60 * 60; // 1 Hour
 
 async function fetchAllVideos(forceRefresh = false) {
   const profile = getCurrentProfile();
+  const preservedChannelId = state.activeChannelId;
 
   if (!profile.channels || profile.channels.length === 0) {
     state.videos = [];
@@ -699,7 +699,7 @@ async function fetchAllVideos(forceRefresh = false) {
   const useLiteMode = !state.data.apiKey;
 
   // 1. Check Cache (Works for both modes)
-  const cacheKey = `safetube_cache_${profile.id}`;
+  const cacheKey = `safetube_v2_${profile.id}`;
   const cachedData = localStorage.getItem(cacheKey);
 
   if (!forceRefresh && cachedData) {
@@ -708,12 +708,21 @@ async function fetchAllVideos(forceRefresh = false) {
       const age = Date.now() - timestamp;
       if (age < CACHE_DURATION) {
         const currentChannelIds = new Set(profile.channels.map(c => c.id));
-        const validVideos = videos.filter(v => currentChannelIds.has(v.channelId));
+        let validVideos = videos.filter(v => currentChannelIds.has(v.channelId));
+
+        // Re-apply filter on cached videos
+        if (state.data.filterShorts) {
+          const shortsRegex = /#shorts?|\[shorts?\]|\(shorts?\)|\bshorts?\b/i;
+          validVideos = validVideos.filter(v => {
+            if (v.duration && v.duration > 0) return v.duration > 90;
+            return !shortsRegex.test(v.title.toLowerCase());
+          });
+        }
 
         if (validVideos.length > 0) {
           console.log('Using cached videos (filtered)');
           state.videos = validVideos;
-          state.activeChannelId = null;
+          state.activeChannelId = preservedChannelId;
           state.currentSort = 'newest';
           renderChannelNav();
           updateSortUI();
@@ -731,13 +740,22 @@ async function fetchAllVideos(forceRefresh = false) {
   }
 
   // 2. Show Loading UI
-  videoContainer.innerHTML = `
-    <div class="loading-state">
-      <div class="spinner"></div>
-      <p>${useLiteMode ? (t('loading_lite_mode') || '🌐 Loading videos (Free Mode)...') : t('loading_videos', { name: profile.name })}</p>
-      ${useLiteMode ? `<p class="small-text" style="color:#999; margin-top:8px;">${t('lite_mode_hint') || 'No API key needed! Using public feeds.'}</p>` : ''}
-    </div>
-  `;
+  videoContainer.innerHTML = '';
+  // Show 8 skeletons
+  for (let i = 0; i < 8; i++) {
+    const skel = document.createElement('div');
+    skel.className = 'skeleton-card';
+    skel.innerHTML = `
+      <div class="skeleton-thumb"></div>
+      <div class="skeleton-text"></div>
+      <div class="skeleton-text short"></div>
+    `;
+    videoContainer.appendChild(skel);
+  }
+
+  // Still show status toast for context
+  apiStatus.textContent = useLiteMode ? (t('loading_lite_mode') || '🌐 Loading (Free Mode)...') : t('loading_videos', { name: profile.name });
+  apiStatus.style.color = '#FFA500';
 
   try {
     let checkVideos = [];
@@ -762,7 +780,7 @@ async function fetchAllVideos(forceRefresh = false) {
             state.videos = [...checkVideos];
 
             // Progressive render
-            state.activeChannelId = null;
+            state.activeChannelId = preservedChannelId;
             state.currentSort = 'newest';
             renderChannelNav();
             updateSortUI();
@@ -815,8 +833,8 @@ async function fetchAllVideos(forceRefresh = false) {
 
     state.videos = checkVideos;
 
-    // Save to Cache
-    const cacheKey2 = `safetube_cache_${profile.id}`;
+    // Save to Cache (must match the read key safetube_v2_*)
+    const cacheKey2 = `safetube_v2_${profile.id}`;
     localStorage.setItem(cacheKey2, JSON.stringify({
       timestamp: Date.now(),
       videos: state.videos
@@ -824,7 +842,7 @@ async function fetchAllVideos(forceRefresh = false) {
 
     if (!useLiteMode) saveLocalData();
 
-    state.activeChannelId = null;
+    state.activeChannelId = preservedChannelId;
     state.currentSort = 'newest';
 
     renderChannelNav();
@@ -903,7 +921,8 @@ async function fetchChannelRSS(channel) {
         if (videoId && title) {
           // Filter Shorts by Title (RSS Limitation)
           const titleLower = title.toLowerCase();
-          const isShortsKeyword = /#shorts|\[shorts\]|\(shorts\)|^shorts$| shorts$/.test(titleLower);
+          // Improved Regex: match #shorts, #short, short videos, etc.
+          const isShortsKeyword = /#shorts?|\[shorts?\]|\(shorts?\)|\bshorts?\b/i.test(titleLower);
 
           if (state.data.filterShorts && isShortsKeyword) {
             continue;
@@ -992,45 +1011,75 @@ async function fetchChannelVideos(channel, startPageToken = null) {
         const videoIds = rawItems.map(item => item.snippet.resourceId.videoId).join(',');
         const detailsUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoIds}&key=${state.data.apiKey}`;
 
+        // Build title lookup from rawItems (already have snippet from playlistItems)
+        const titleMap = new Map(rawItems.map(item => [
+          item.snippet.resourceId.videoId,
+          item.snippet.title
+        ]));
+
         let allowedIds = new Set();
+        let dData = null; // Declare outside try so durationMap can access it below
 
         try {
           const dRes = await fetch(detailsUrl);
-          const dData = await dRes.json();
+          dData = await dRes.json(); // Assign (not declare) so it's accessible after the block
 
           if (dData.items) {
             dData.items.forEach(v => {
-              const duration = parseDuration(v.contentDetails.duration);
-              // Filter: YouTube Shorts can be up to 3 mins
-              if (duration > 180) {
+              const durRaw = v.contentDetails.duration;
+              const duration = parseDuration(durRaw);
+              const title = titleMap.get(v.id) || v.id;
+
+              // Filter: Shorts are <= 60s, threshold 90s allows short music clips through.
+              // If duration is 0 (parse fail), ALLOW it to avoid hiding valid videos.
+              if (duration > 90 || duration === 0) {
                 allowedIds.add(v.id);
               } else {
-                console.log(`Filtered Short: ${v.snippet?.title || v.id} (${duration}s)`);
+                console.log(`Filtered Short: ${title} (${duration}s) [Raw: ${durRaw}]`);
               }
             });
           }
         } catch (err) {
           console.warn('Failed to fetch video durations, skipping filter', err);
-          // Fallback: Allow all if detailed check fails
+
+          // Show a warning to the user so they know filtering might be incomplete
+          const apiStatus = document.getElementById('api-status');
+          if (apiStatus) {
+            apiStatus.textContent = "⚠️ Duration check failed - Check API Quota";
+            apiStatus.className = "status-toast warning show";
+            setTimeout(() => apiStatus.classList.remove('show'), 5000);
+          }
+
+          // Fallback: allow all videos if we can't check duration
           rawItems.forEach(item => allowedIds.add(item.snippet.resourceId.videoId));
+        }
+
+        // Create a map for duration lookup (used to store duration on video objects for cache)
+        const durationMap = new Map();
+        if (dData && dData.items) {
+          dData.items.forEach(v => {
+            durationMap.set(v.id, parseDuration(v.contentDetails.duration));
+          });
         }
 
         const pageVideos = rawItems
           .filter(item => allowedIds.has(item.snippet.resourceId.videoId))
-          .map(item => ({
-            id: item.snippet.resourceId.videoId,
-            title: item.snippet.title,
-            thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium?.url,
-            channelTitle: item.snippet.channelTitle,
-            channelId: channel.id,
-            publishedAt: item.snippet.publishedAt
-          }));
+          .map(item => {
+            const vidId = item.snippet.resourceId.videoId;
+            return {
+              id: vidId,
+              title: item.snippet.title,
+              thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium?.url,
+              channelTitle: item.snippet.channelTitle,
+              channelId: channel.id,
+              publishedAt: item.snippet.publishedAt,
+              duration: durationMap.get(vidId)
+            };
+          });
 
         allFilteredVideos.push(...pageVideos);
 
-        // Smart decision: Do we need more videos?
         if (allFilteredVideos.length >= MIN_DESIRED_VIDEOS) {
-          // Got enough long videos, stop fetching
           console.log(`[${channel.name}] Got ${allFilteredVideos.length} long videos in ${page} page(s) ✓`);
           break;
         }
@@ -1041,8 +1090,8 @@ async function fetchChannelVideos(channel, startPageToken = null) {
         }
 
       } else {
-        // filterShorts is OFF: return all videos from first page, no pagination needed
-        return rawItems.map(item => ({
+        // filterShorts is OFF: take all videos from first page
+        const mapped = rawItems.map(item => ({
           id: item.snippet.resourceId.videoId,
           title: item.snippet.title,
           thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium?.url,
@@ -1050,6 +1099,11 @@ async function fetchChannelVideos(channel, startPageToken = null) {
           channelId: channel.id,
           publishedAt: item.snippet.publishedAt
         }));
+
+        allFilteredVideos.push(...mapped);
+
+        // Use break to exit loop but trigger token save below
+        break;
       }
 
     } while (page < MAX_PAGES && nextPageToken);
@@ -1069,14 +1123,17 @@ async function fetchChannelVideos(channel, startPageToken = null) {
   }
 }
 
-// Helper: Parse ISO 8601 Duration to Seconds
+// Helper: Parse ISO 8601 Duration to Seconds (Robust)
 function parseDuration(duration) {
-  const match = duration.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
-  if (!match) return 0;
+  if (!duration) return 0;
 
-  const hours = (parseInt(match[1]) || 0);
-  const minutes = (parseInt(match[2]) || 0);
-  const seconds = (parseInt(match[3]) || 0);
+  const matchH = duration.match(/(\d+)H/);
+  const matchM = duration.match(/(\d+)M/);
+  const matchS = duration.match(/(\d+)S/);
+
+  const hours = matchH ? parseInt(matchH[1]) : 0;
+  const minutes = matchM ? parseInt(matchM[1]) : 0;
+  const seconds = matchS ? parseInt(matchS[1]) : 0;
 
   return (hours * 3600) + (minutes * 60) + seconds;
 }
@@ -1570,6 +1627,20 @@ function renderVideos() {
     displayVideos = state.videos.filter(v => v.channelId === state.activeChannelId);
   }
 
+  // Double-Check Filter: Re-apply Shorts filter (Title-based) for cached data
+  // This handles the case where old cache contains Shorts, or API filter missed them.
+  if (state.data.filterShorts) {
+    const shortsRegex = /#shorts?|\[shorts?\]|\(shorts?\)|\bshorts?\b/i;
+    displayVideos = displayVideos.filter(v => {
+      // If we have duration (new cache), use it!
+      if (v.duration && v.duration > 0) {
+        return v.duration > 90;
+      }
+      // Fallback: Filter by Title
+      return !shortsRegex.test(v.title.toLowerCase());
+    });
+  }
+
   // Sort
   displayVideos = getSortedVideos(displayVideos);
 
@@ -1607,8 +1678,7 @@ function renderVideos() {
     videoContainer.appendChild(card);
   });
 
-  // --- "Load More" Button ---
-  // Show only when: viewing a specific channel + API mode + has next page token
+  // --- "Load More" Button (API Mode) ---
   if (state.activeChannelId && state.data.apiKey) {
     const nextToken = state.channelNextPageTokens[state.activeChannelId];
     if (nextToken) {
@@ -1628,6 +1698,23 @@ function renderVideos() {
       videoContainer.appendChild(loadMoreContainer);
 
       document.getElementById('load-more-btn').onclick = () => loadMoreChannelVideos(state.activeChannelId);
+    }
+  }
+  // --- "Watch on YouTube" Button (Lite Mode) ---
+  else if (state.activeChannelId && !state.data.apiKey) {
+    const profile = getCurrentProfile();
+    const channel = profile.channels.find(c => c.id === state.activeChannelId);
+    if (channel) {
+      const loadMoreContainer = document.createElement('div');
+      loadMoreContainer.className = 'load-more-container';
+      loadMoreContainer.innerHTML = `
+        <a href="https://www.youtube.com/channel/${channel.id}" target="_blank" class="load-more-btn" style="text-decoration:none;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.33 29 29 0 0 0-.46-5.33z"></path><polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02"></polygon></svg>
+          ${t('watch_on_youtube')}
+        </a>
+        <p class="load-more-hint">${t('lite_mode_more_hint')}</p>
+      `;
+      videoContainer.appendChild(loadMoreContainer);
     }
   }
 }
@@ -1661,7 +1748,7 @@ async function loadMoreChannelVideos(channelId) {
 
       // Update cache
       const profile = getCurrentProfile();
-      const cacheKey = `safetube_cache_${profile.id}`;
+      const cacheKey = `safetube_v2_${profile.id}`;
       localStorage.setItem(cacheKey, JSON.stringify({
         timestamp: Date.now(),
         videos: state.videos
@@ -1755,19 +1842,115 @@ function renderChannelList() {
 }
 
 // --- Player Logic ---
+let activeYTPlayer = null;
+
 function openPlayer(video) {
-  const embedUrl = `https://www.youtube.com/embed/${video.id}?autoplay=1&rel=0&modestbranding=1`;
-  document.getElementById('youtube-player').innerHTML = `
-    <iframe width="100%" height="100%" src="${embedUrl}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-  `;
+  const playerContainer = document.getElementById('youtube-player');
+  playerContainer.innerHTML = '';
+  document.querySelector('.video-ended-overlay')?.remove();
+
   document.getElementById('video-title').textContent = video.title;
   document.getElementById('video-channel').textContent = video.channelTitle;
   playerModal.classList.remove('hidden');
+  toggleBodyScroll(true);
+
+  if (window.YT && window.YT.Player) {
+    // Use IFrame API so we can detect video end and block the end screen
+    const playerDiv = document.createElement('div');
+    playerContainer.appendChild(playerDiv);
+
+    activeYTPlayer = new YT.Player(playerDiv, {
+      videoId: video.id,
+      playerVars: {
+        autoplay: 1,
+        rel: 0,
+        modestbranding: 1,
+        iv_load_policy: 3  // hide annotations/cards
+      },
+      events: {
+        onStateChange: (event) => {
+          if (event.data === 0) { // 0 = YT.PlayerState.ENDED
+            showEndedOverlay(video, activeYTPlayer);
+          }
+        }
+      }
+    });
+  } else {
+    // Fallback: direct iframe (YT API not ready yet)
+    activeYTPlayer = null;
+    const iframe = document.createElement('iframe');
+    iframe.src = `https://www.youtube.com/embed/${video.id}?autoplay=1&rel=0&modestbranding=1&iv_load_policy=3`;
+    iframe.setAttribute('frameborder', '0');
+    iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+    iframe.allowFullscreen = true;
+    playerContainer.appendChild(iframe);
+  }
+}
+
+function showEndedOverlay(_video, player) {
+  document.querySelector('.video-ended-overlay')?.remove();
+
+  const wrapper = document.querySelector('#player-modal .video-wrapper');
+  if (!wrapper) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'video-ended-overlay';
+  overlay.innerHTML = `
+    <div class="ended-content">
+      <div class="ended-icon">🎬</div>
+      <p class="ended-msg">${t('video_ended')}</p>
+      <div class="ended-actions">
+        <button class="ended-btn ended-replay">↺ ${t('watch_again')}</button>
+        <button class="ended-btn ended-close">✕ ${t('close')}</button>
+      </div>
+    </div>
+  `;
+
+  overlay.querySelector('.ended-replay').onclick = () => {
+    overlay.remove();
+    if (player) { player.seekTo(0); player.playVideo(); }
+  };
+  overlay.querySelector('.ended-close').onclick = () => closePlayer();
+
+  wrapper.appendChild(overlay);
 }
 
 function closePlayer() {
   playerModal.classList.add('hidden');
   document.getElementById('youtube-player').innerHTML = '';
+  document.querySelector('.video-ended-overlay')?.remove();
+  if (activeYTPlayer) {
+    try { activeYTPlayer.destroy(); } catch (e) { /* ignore */ }
+    activeYTPlayer = null;
+  }
+  toggleBodyScroll(false);
+}
+
+// --- Settings Logic ---
+function openSettings() {
+  settingsModal.classList.remove('hidden');
+  toggleBodyScroll(true);
+  renderChannelList();
+  updateProfileUI();
+  const apiKeyInput = document.getElementById('api-key-input');
+  if (apiKeyInput) apiKeyInput.value = state.data.apiKey;
+
+  // Load Preferences
+  const shareStatsCb = document.getElementById('share-stats-checkbox');
+  if (shareStatsCb) shareStatsCb.checked = !!state.data.shareStats;
+  const filterShortsCb = document.getElementById('filter-shorts-checkbox');
+  if (filterShortsCb) filterShortsCb.checked = !!state.data.filterShorts;
+}
+
+function closeSettings() {
+  settingsModal.classList.add('hidden');
+  searchResultsDropdown.classList.add('hidden');
+  toggleBodyScroll(false);
+}
+
+// --- Helper: Body Scroll Lock ---
+function toggleBodyScroll(lock) {
+  document.body.style.overflow = lock ? 'hidden' : '';
 }
 
 // --- Profile Actions ---
@@ -1886,7 +2069,7 @@ async function checkAndUploadStats(force = false) {
 
 // --- Event Listeners ---
 function setupEventListeners() {
-  document.getElementById('refresh-btn').onclick = fetchAllVideos;
+  document.getElementById('refresh-btn').onclick = () => fetchAllVideos(true);
 
   // Language Switcher
   document.querySelectorAll('.lang-btn').forEach(btn => {
@@ -1921,51 +2104,14 @@ function setupEventListeners() {
     btn.onclick = () => sortVideos(btn.dataset.sort);
   });
 
-  document.getElementById('settings-btn').onclick = () => {
-    // Open Settings Directly (No Parent Gate)
-    settingsModal.classList.remove('hidden');
-    // Refresh Lists just in case
-    renderChannelList();
-    updateProfileUI();
-    const apiKeyInput = document.getElementById('api-key-input');
-    if (apiKeyInput) apiKeyInput.value = state.data.apiKey;
+  document.getElementById('settings-btn').onclick = openSettings;
+  document.getElementById('close-settings').onclick = closeSettings;
+  document.getElementById('close-player').onclick = closePlayer;
 
-    // Load Stats Checkbox
-    const shareStatsCb = document.getElementById('share-stats-checkbox');
-    if (shareStatsCb) shareStatsCb.checked = !!state.data.shareStats;
-  };
-
-  document.getElementById('close-settings').onclick = () => {
-    settingsModal.classList.add('hidden');
-    searchResultsDropdown.classList.add('hidden');
-  };
-
-  // UX: Close Modal on Overlay Click
-  settingsModal.onclick = (e) => {
-    if (e.target === settingsModal) {
-      settingsModal.classList.add('hidden');
-      searchResultsDropdown.classList.add('hidden');
-    }
-  };
-
-  // UX: Close Modal on Escape Key
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      if (!settingsModal.classList.contains('hidden')) {
-        settingsModal.classList.add('hidden');
-        searchResultsDropdown.classList.add('hidden');
-      }
-      if (!gateModal.classList.contains('hidden')) {
-        gateModal.classList.add('hidden');
-      }
-      if (!playerModal.classList.contains('hidden')) {
-        // Player modal might need special cleanup if playing
-        playerModal.classList.add('hidden');
-        const player = document.getElementById('player-iframe');
-        if (player) player.src = '';
-      }
-    }
-  });
+  // Overlay Clicks
+  settingsModal.onclick = (e) => { if (e.target === settingsModal) closeSettings(); };
+  playerModal.onclick = (e) => { if (e.target === playerModal) closePlayer(); };
+  gateModal.onclick = (e) => { if (e.target === gateModal) gateModal.classList.add('hidden'); toggleBodyScroll(false); };
 
   // Stats Toggle Listener
   const shareStatsCb = document.getElementById('share-stats-checkbox');
@@ -1989,6 +2135,16 @@ function setupEventListeners() {
 
         checkAndUploadStats(true); // Attempt upload immediately if opted in
       }
+    };
+  }
+
+  // Filter Shorts Listener
+  const filterShortsCb = document.getElementById('filter-shorts-checkbox');
+  if (filterShortsCb) {
+    filterShortsCb.onchange = (e) => {
+      state.data.filterShorts = e.target.checked;
+      saveLocalData();
+      fetchAllVideos(true); // Re-fetch with new filter applied
     };
   }
 
@@ -2151,9 +2307,21 @@ function setupEventListeners() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closePlayer();
-      settingsModal.classList.add('hidden');
+      closeSettings();
       gateModal.classList.add('hidden');
-      searchResultsDropdown.classList.add('hidden');
+      const wizard = document.querySelector('.wizard-modal');
+      if (wizard) wizard.remove();
+      toggleBodyScroll(false);
+    }
+
+    if (e.key === 'Enter') {
+      if (!gateModal.classList.contains('hidden')) {
+        const btn = document.getElementById('gate-submit');
+        if (btn) btn.click();
+      } else if (e.target.id === 'api-key-input') {
+        const btn = document.getElementById('save-api-key');
+        if (btn) btn.click();
+      }
     }
   });
 }

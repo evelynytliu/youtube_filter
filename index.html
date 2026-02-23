@@ -105,15 +105,20 @@
 
     <!-- Video Player Modal -->
     <div id="player-modal" class="modal-overlay hidden">
-      <div class="modal-content glass-dark">
-        <button id="close-player" class="close-btn">❌ Close</button>
+      <div class="player-modal-content glass-dark">
+        <button id="close-player" class="player-close-btn" aria-label="Close">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
         <div class="video-wrapper">
           <div id="youtube-player"></div>
-          <!-- Iframe will appear here -->
         </div>
         <div class="video-info">
-          <h2 id="video-title">Video Title</h2>
           <p id="video-channel">Channel Name</p>
+          <h2 id="video-title">Video Title</h2>
         </div>
       </div>
     </div>
@@ -274,7 +279,7 @@
                 <span style="font-weight: 600; font-size: 1rem;">Filter YouTube Shorts</span>
                 <p class="small-text" style="margin-top: 4px; color: #666; font-weight: normal;">
                   <strong>Lite Mode:</strong> Hides videos with '#shorts' in the title.<br>
-                  <strong>Pro Mode:</strong> Hides all videos under 3 minutes (more accurate).
+                  <strong>Pro Mode:</strong> Hides videos under 90 seconds using real duration data.
                 </p>
               </div>
             </label>
