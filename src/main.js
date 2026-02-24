@@ -217,7 +217,7 @@ function showSyncConflictDialog(localData, cloudData) {
     document.body.appendChild(modal);
 
     document.getElementById('sync-choose-local').onclick = () => { modal.remove(); resolve('local'); };
-    document.getElementById('sync-choose-cloud').onclick  = () => { modal.remove(); resolve('cloud');  };
+    document.getElementById('sync-choose-cloud').onclick = () => { modal.remove(); resolve('cloud'); };
   });
 }
 
@@ -1345,9 +1345,9 @@ function getChannelInterestScores(profileId) {
   history.forEach(({ channelId, watchedAt }) => {
     const daysAgo = (now - watchedAt) / 86400000;
     if (!scores[channelId]) scores[channelId] = 0;
-    if (daysAgo < 3)       scores[channelId] += 3;
-    else if (daysAgo < 7)  scores[channelId] += 2;
-    else                   scores[channelId] += 1;
+    if (daysAgo < 3) scores[channelId] += 3;
+    else if (daysAgo < 7) scores[channelId] += 2;
+    else scores[channelId] += 1;
   });
   return scores;
 }
@@ -1534,32 +1534,47 @@ function finalizeIconUpdate() {
 let searchDebounce;
 
 // --- Fetch Top Ranked Channels from Stats ---
+
+// Shared cache so all callers (settings search, recommendation modal, wizard) share one fetch
+let _rankingsCache = null;
+let _rankingsFetchPromise = null;
+
+async function fetchRankingsRaw() {
+  if (_rankingsCache) return _rankingsCache;
+  if (_rankingsFetchPromise) return _rankingsFetchPromise;
+
+  _rankingsFetchPromise = fetch(STATS_ENDPOINT + '?action=getRankings')
+    .then(r => r.json())
+    .then(data => {
+      const channels = (data.channels && Array.isArray(data.channels)) ? data.channels : [];
+      _rankingsCache = channels.length > 0 ? channels : [...CURATED_CHANNELS];
+      _rankingsFetchPromise = null;
+      return _rankingsCache;
+    })
+    .catch(e => {
+      console.warn('Failed to fetch rankings', e);
+      _rankingsFetchPromise = null;
+      return [...CURATED_CHANNELS];
+    });
+
+  return _rankingsFetchPromise;
+}
+
 async function fetchTopRankedChannels() {
-  try {
-    const response = await fetch(STATS_ENDPOINT + '?action=getRankings');
-    const data = await response.json();
-
-    if (!data.channels || !Array.isArray(data.channels)) {
-      return [];
-    }
-
-    // Transform the ranking data to match the search result format
-    return data.channels.map(ch => ({
-      snippet: {
-        channelId: ch.id,
-        channelTitle: ch.name,
-        description: `${ch.count || 0} users subscribed`,
-        thumbnails: {
-          default: {
-            url: ch.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(ch.name)}&size=88&background=random`
-          }
+  const raw = await fetchRankingsRaw();
+  // Transform to search-result format for the settings dropdown
+  return raw.map(ch => ({
+    snippet: {
+      channelId: ch.id,
+      channelTitle: ch.name,
+      description: `${ch.count || 0} users subscribed`,
+      thumbnails: {
+        default: {
+          url: ch.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(ch.name)}&size=88&background=random`
         }
       }
-    }));
-  } catch (e) {
-    console.warn('Failed to fetch top ranked channels', e);
-    return [];
-  }
+    }
+  }));
 }
 
 async function searchChannels(query) {
@@ -1729,6 +1744,23 @@ function renderChannelNav() {
     btn.onclick = () => filterVideos(channel.id);
     channelNav.appendChild(btn);
   });
+
+  // "+" Add Channel button at the end of nav
+  const addBtn = document.createElement('div');
+  addBtn.className = 'nav-item nav-item-add';
+  addBtn.title = '新增頻道';
+  addBtn.innerHTML = `
+    <div class="nav-add-circle">
+      <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+      </svg>
+    </div>
+    <span>新增</span>
+  `;
+  addBtn.onclick = () => showAddChannelModal();
+  channelNav.appendChild(addBtn);
 }
 
 function filterVideos(channelId) {
@@ -2152,10 +2184,10 @@ function openPlayer(video) {
 function relativeTime(ts) {
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60000);
-  if (mins < 1)  return t('history_just_now');
+  if (mins < 1) return t('history_just_now');
   if (mins < 60) return t('history_minutes_ago', { n: mins });
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return t('history_hours_ago', { n: hrs });
+  if (hrs < 24) return t('history_hours_ago', { n: hrs });
   return t('history_days_ago', { n: Math.floor(hrs / 24) });
 }
 
@@ -2718,12 +2750,12 @@ async function showOnboardingWizard() {
   const googleContainer = modal.querySelector('#wizard-google-container');
 
   // Pre-fetch channel data NOW (during Step 1, while user types name)
+  // Uses shared cache so other UI panels (settings search, recommendation modal) won't re-fetch
   let prefetchedChannels = null;
-  const prefetchPromise = fetch(STATS_ENDPOINT + '?action=getRankings&t=' + Date.now())
-    .then(r => r.json())
-    .then(data => {
-      if (data.channels && data.channels.length > 0) {
-        prefetchedChannels = data.channels.slice(0, 16);
+  const prefetchPromise = fetchRankingsRaw()
+    .then(channels => {
+      if (channels && channels.length > 0) {
+        prefetchedChannels = channels.slice(0, 16);
         return prefetchedChannels;
       }
       return null;
@@ -2929,12 +2961,11 @@ async function loadWizardRecommendations(modal, prefetchedChannels, prefetchProm
       }
     }
 
-    // Strategy 3: Direct fetch as last resort
-    const response = await fetch(STATS_ENDPOINT + '?action=getRankings&t=' + Date.now());
-    const data = await response.json();
+    // Strategy 3: Use shared cache (no extra network call)
+    const channels = await fetchRankingsRaw();
 
-    if (data.channels && data.channels.length > 0) {
-      renderAll(data.channels.slice(0, 16));
+    if (channels && channels.length > 0) {
+      renderAll(channels.slice(0, 16));
     } else {
       if (loader) loader.style.display = 'none';
     }
@@ -2943,6 +2974,254 @@ async function loadWizardRecommendations(modal, prefetchedChannels, prefetchProm
     if (loader) loader.style.display = 'none';
     // Curated fallback is already visible - that's fine
   }
+}
+
+// === SMART CHANNEL RECOMMENDATIONS ===
+
+// Name-based category keywords for matching channels to interests
+const CHANNEL_CATEGORY_KEYWORDS = {
+  music: ['song', 'music', 'sing', 'pinkfong', 'cocomelon', 'simple songs', 'chuchu', 'baby bum', 'loolookids', 'kidz', 'nursery', 'rhyme', 'melody', 'lullaby'],
+  toddler: ['baby', 'toddler', 'babybus', 'peppa pig', 'paw patrol', 'hey duggee', 'cocomelon', 'bluey', 'bluey'],
+  education: ['learn', 'alphablocks', 'numberblocks', 'blippi', 'sesame', 'pbs', 'storybots', 'preschool', 'abc', 'phonics'],
+  science: ['mark rober', 'crunchlabs', 'national geographic', 'science', 'stem', 'experiment', 'discovery', '昆蟲'],
+  animation: ['cartoon', 'animation', 'peppa', 'masha', 'wolfoo', 'oddbods', 'adventures', 'tales', 'bluey'],
+  activities: ['dude perfect', 'trick', 'sport', 'challenge', 'explore', 'hafu'],
+  chinese: ['哈哈', '昆蟲', '樂樂', '台灣', 'hafu go', 'chinese', 'mandarin'],
+};
+
+function getChannelCategories(channelName) {
+  const lower = channelName.toLowerCase();
+  return Object.entries(CHANNEL_CATEGORY_KEYWORDS)
+    .filter(([, keywords]) => keywords.some(kw => lower.includes(kw)))
+    .map(([cat]) => cat);
+}
+
+function getSmartRecommendations(allChannels) {
+  const profile = getCurrentProfile();
+  const addedIds = new Set(profile.channels.map(c => c.id));
+
+  // Build category profile from user's existing channels
+  const profileCategories = new Set();
+  profile.channels.forEach(ch => {
+    getChannelCategories(ch.name).forEach(cat => profileCategories.add(cat));
+  });
+
+  const available = allChannels.filter(ch => !addedIds.has(ch.id));
+
+  // If nearly all channels are already added, include the added ones too so the
+  // tab always has content. renderRecGrid will show them with the "already added" badge.
+  const pool = available.length >= 4 ? available : allChannels;
+
+  if (profileCategories.size === 0) return pool.slice(0, 12);
+
+  // Score each channel by category overlap with user's interests
+  const scored = pool.map(ch => {
+    const cats = getChannelCategories(ch.name);
+    const score = cats.filter(c => profileCategories.has(c)).length;
+    return { ...ch, _score: score };
+  });
+  scored.sort((a, b) => b._score - a._score);
+  return scored.slice(0, 12);
+}
+
+async function showAddChannelModal() {
+  // Toggle: close if already open
+  const existing = document.getElementById('add-channel-modal');
+  if (existing) { existing.remove(); return; }
+
+  const profile = getCurrentProfile();
+
+  const modal = document.createElement('div');
+  modal.id = 'add-channel-modal';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-content glass add-channel-content">
+      <button class="close-btn-corner" id="close-add-channel">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+      <div class="modal-header" style="margin-bottom:16px;">
+        <h2 style="font-size:1.2rem; margin:0;">✨ 新增頻道</h2>
+      </div>
+      <div class="rec-tabs">
+        <button class="rec-tab active" data-tab="popular">🏆 KiddoLens 人氣榜</button>
+        <button class="rec-tab" data-tab="smart">🎯 為 ${profile.name} 推薦</button>
+      </div>
+      <div id="rec-content-popular" class="rec-content">
+        <div class="wizard-channel-grid" id="rec-grid-popular"></div>
+      </div>
+      <div id="rec-content-smart" class="rec-content" style="display:none;">
+        <div class="wizard-channel-grid" id="rec-grid-smart"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  // Tab switching
+  modal.querySelectorAll('.rec-tab').forEach(tab => {
+    tab.onclick = () => {
+      modal.querySelectorAll('.rec-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('rec-content-popular').style.display = tab.dataset.tab === 'popular' ? '' : 'none';
+      document.getElementById('rec-content-smart').style.display = tab.dataset.tab === 'smart' ? '' : 'none';
+    };
+  });
+
+  // Close
+  document.getElementById('close-add-channel').onclick = () => modal.remove();
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  // Helper: re-render both grids with the given channel list
+  function renderBothGrids(channels) {
+    const el = document.getElementById('add-channel-modal');
+    if (!el) return; // modal was closed
+    const addedIds = new Set(getCurrentProfile().channels.map(c => c.id));
+    renderRecGrid(document.getElementById('rec-grid-popular'), channels, addedIds);
+    renderRecGrid(document.getElementById('rec-grid-smart'), getSmartRecommendations(channels), addedIds);
+  }
+
+  // Step 1: Show CURATED_CHANNELS immediately (sync, guaranteed content)
+  renderBothGrids([...CURATED_CHANNELS]);
+
+  // Step 2: Fetch real community rankings and always re-render with them.
+  // Also enriches any channels missing thumbnails via YouTube API (if key is set).
+  fetchRankingsRaw()
+    .then(async channels => {
+      if (!document.getElementById('add-channel-modal')) return; // modal closed
+
+      // Fill in missing thumbnails via YouTube API (batch, one request)
+      const missing = channels.filter(ch => !ch.thumbnail);
+      if (missing.length > 0 && state.data.apiKey) {
+        try {
+          const ids = missing.map(ch => ch.id).join(',');
+          const res = await fetch(
+            `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`
+          );
+          const data = await res.json();
+          if (data.items) {
+            data.items.forEach(item => {
+              const ch = channels.find(c => c.id === item.id);
+              if (ch) ch.thumbnail = item.snippet.thumbnails.default?.url || '';
+            });
+          }
+        } catch (e) { /* thumbnails remain empty, ui-avatars fallback will handle it */ }
+      }
+
+      if (!document.getElementById('add-channel-modal')) return; // closed while fetching
+      renderBothGrids(channels);
+    })
+    .catch(() => {/* curated fallback already visible */ });
+}
+
+function renderRecGrid(grid, channels, addedIds) {
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  if (!channels || channels.length === 0) {
+    grid.innerHTML = '<p style="grid-column:1/-1;text-align:center;color:#aaa;padding:20px 0;">沒有更多建議頻道</p>';
+    return;
+  }
+
+  channels.forEach(channel => {
+    const isAdded = addedIds.has(channel.id);
+    const card = document.createElement('div');
+    card.className = `channel-option-card${isAdded ? ' rec-already-added' : ''}`;
+
+    const thumbSrc = channel.thumbnail
+      || `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128&rounded=true`;
+    const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128`;
+
+    card.innerHTML = `
+      <img src="${thumbSrc}" class="channel-option-img" onerror="this.onerror=null;this.src='${fallback}'" loading="lazy"/>
+      <span class="channel-check-badge${isAdded ? ' badge-added' : ''}">
+        ${isAdded ? '✓' : '✔'}
+      </span>
+      <div class="channel-option-label">${channel.name}</div>
+      ${isAdded ? '<div class="rec-added-label">已加入</div>' : ''}
+    `;
+
+    if (!isAdded) {
+      card.onclick = () => handleChannelAdd(channel);
+    }
+    grid.appendChild(card);
+  });
+}
+
+function handleChannelAdd(channel) {
+  const profiles = state.data.profiles;
+
+  // Single profile: add immediately and close
+  if (profiles.length <= 1) {
+    const profile = getCurrentProfile();
+    if (!profile.channels.some(c => c.id === channel.id)) {
+      profile.channels.push({ id: channel.id, name: channel.name, thumbnail: channel.thumbnail || '' });
+      saveLocalData();
+      renderChannelNav();
+      renderChannelList();
+      fetchAllVideos();
+    }
+    document.getElementById('add-channel-modal')?.remove();
+    return;
+  }
+
+  // Multiple profiles: show profile picker
+  showProfilePickerForChannel(channel);
+}
+
+function showProfilePickerForChannel(channel) {
+  const currentProfile = getCurrentProfile();
+  const otherProfiles = state.data.profiles.filter(p => p.id !== currentProfile.id);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'profile-pick-overlay';
+  overlay.className = 'profile-pick-overlay';
+  overlay.innerHTML = `
+    <div class="profile-pick-content glass">
+      <h3 style="margin:0 0 6px;font-size:1.05rem;">加入「${channel.name}」</h3>
+      <p style="margin:0 0 16px;font-size:0.85rem;color:#666;">同時加入其他孩子的清單？</p>
+      <div class="profile-pick-list">
+        ${otherProfiles.map(p => `
+          <label class="profile-pick-item">
+            <input type="checkbox" value="${p.id}">
+            <span>${p.avatar || '👤'} ${p.name}</span>
+          </label>
+        `).join('')}
+      </div>
+      <div class="profile-pick-actions">
+        <button id="profile-pick-cancel" class="secondary-btn" style="flex:1;">取消</button>
+        <button id="profile-pick-confirm" class="primary-btn" style="flex:1;">加入頻道</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  document.getElementById('profile-pick-cancel').onclick = () => overlay.remove();
+  document.getElementById('profile-pick-confirm').onclick = () => {
+    const newChannel = { id: channel.id, name: channel.name, thumbnail: channel.thumbnail || '' };
+
+    // Always add to current profile
+    if (!currentProfile.channels.some(c => c.id === channel.id)) {
+      currentProfile.channels.push({ ...newChannel });
+    }
+
+    // Add to each checked additional profile
+    overlay.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
+      const p = state.data.profiles.find(pr => pr.id === cb.value);
+      if (p && !p.channels.some(c => c.id === channel.id)) {
+        p.channels.push({ ...newChannel });
+      }
+    });
+
+    saveLocalData();
+    renderChannelNav();
+    renderChannelList();
+    fetchAllVideos();
+    overlay.remove();
+    document.getElementById('add-channel-modal')?.remove();
+  };
 }
 
 // Start

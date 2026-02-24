@@ -108,7 +108,7 @@ export const translations = {
     lite_mode_more_hint: { en: "Lite Mode limits videos. Use Pro Mode for more.", zh: "輕量模式影片數量有限。使用專業模式可看更多。" },
     video_ended: { en: "Video finished!", zh: "影片播放完畢！" },
     watch_again: { en: "Watch Again", zh: "再看一次" },
-    footer_made_by: { en: "Made with ❤️ by ", zh: "製作人員 ❤️ " },
+    footer_made_by: { en: "Created by ", zh: "Created by " },
 
     // Sync conflict & status
     sync_conflict_title: { en: "Sync Conflict", zh: "同步衝突" },

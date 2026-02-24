@@ -2020,6 +2020,175 @@ input[type="checkbox"] {
   -webkit-box-orient: vertical;
 }
 
+/* ================================================================
+   ADD CHANNEL BUTTON (nav "+" pill)
+   ================================================================ */
+.nav-add-circle {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: #f4f7ff;
+  border: 2.5px dashed var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  transition: all 0.22s;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.nav-item-add:hover .nav-add-circle {
+  background: var(--primary-light);
+  border-style: solid;
+  transform: scale(1.08);
+}
+
+.nav-item-add:active .nav-add-circle {
+  transform: scale(0.93);
+}
+
+@media (max-width: 600px) {
+  .nav-add-circle { width: 54px; height: 54px; }
+}
+
+@media (max-width: 400px) {
+  .nav-add-circle { width: 48px; height: 48px; }
+}
+
+/* ================================================================
+   ADD CHANNEL RECOMMENDATION MODAL
+   ================================================================ */
+.add-channel-content {
+  max-width: 560px;
+  width: 92%;
+  max-height: 88vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+}
+
+.add-channel-content .wizard-channel-grid {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.rec-tabs {
+  display: flex;
+  gap: 6px;
+  background: #f4f7ff;
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.rec-tab {
+  flex: 1;
+  border: none;
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-family: var(--font-body);
+  font-size: 0.83rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  color: var(--mid);
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.rec-tab.active {
+  background: white;
+  color: var(--primary);
+  box-shadow: 0 2px 8px rgba(59, 111, 232, 0.12);
+}
+
+.rec-tab:hover:not(.active) {
+  color: var(--primary);
+}
+
+/* Already-added channel cards in recommendation grid */
+.channel-option-card.rec-already-added {
+  opacity: 0.52;
+  cursor: default;
+  pointer-events: none;
+}
+
+.channel-check-badge.badge-added {
+  display: flex !important;
+  background: #48bb78;
+}
+
+.rec-added-label {
+  font-size: 0.7rem;
+  color: #48bb78;
+  font-weight: 700;
+  margin-top: 2px;
+  text-align: center;
+}
+
+/* ================================================================
+   PROFILE PICKER OVERLAY (multi-child add confirmation)
+   ================================================================ */
+.profile-pick-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 15, 36, 0.72);
+  backdrop-filter: blur(8px);
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-pick-content {
+  max-width: 340px;
+  width: 88%;
+  padding: 24px;
+  border-radius: 20px;
+}
+
+.profile-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.profile-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1.5px solid #eee;
+  transition: background 0.15s, border-color 0.15s;
+  user-select: none;
+}
+
+.profile-pick-item:hover {
+  background: var(--primary-light);
+  border-color: var(--primary);
+}
+
+.profile-pick-item input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.profile-pick-actions {
+  display: flex;
+  gap: 10px;
+}
+
 .wizard-btn-primary {
   background: var(--primary);
   color: white;
@@ -2177,55 +2346,116 @@ input[type="checkbox"] {
    FOOTER
    ================================================================ */
 .app-footer {
-  text-align: center;
-  padding: 2.5rem 5% 4rem;
-  background: transparent;
+  background: var(--bg-secondary, #f8f9fa);
+  border-top: 1px solid var(--border, #e5e7eb);
+  padding: 2.5rem 5% 3rem;
   color: var(--mid);
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: 0.85rem;
   animation: fadeIn 0.8s ease-out;
 }
 
-.footer-content {
+.footer-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.footer-top {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.footer-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
   flex-wrap: wrap;
 }
 
-.app-footer a {
+.footer-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: 0.02em;
+  transition: color var(--transition);
+}
+
+.footer-name:hover {
+  color: var(--primary);
+}
+
+.footer-tagline {
+  font-size: 0.78rem;
+  color: var(--mid);
+  letter-spacing: 0.04em;
+}
+
+.footer-socials {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.footer-socials a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--mid);
+  text-decoration: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: color var(--transition);
+}
+
+.footer-socials a:hover {
+  color: var(--primary);
+}
+
+.footer-socials a svg {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.footer-socials a:hover svg {
+  opacity: 1;
+}
+
+.footer-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border, #e5e7eb);
+  font-size: 0.78rem;
+  color: var(--mid);
+}
+
+.footer-bottom a {
   color: var(--primary);
   text-decoration: none;
-  font-weight: 700;
-  transition: all var(--transition);
-  position: relative;
-  padding: 2px 4px;
-  border-radius: 4px;
+  font-weight: 600;
+  transition: color var(--transition);
 }
 
-.app-footer a:hover {
-  background: var(--primary-light);
+.footer-bottom a:hover {
   color: var(--primary-dark);
-  transform: translateY(-1px);
+  text-decoration: underline;
 }
 
-.app-footer a::after {
-  content: '';
-  position: absolute;
-  width: 100%;
-  height: 2px;
-  bottom: 0;
-  left: 0;
-  background: var(--primary);
-  transform: scaleX(0);
-  transition: transform 0.3s ease;
-  transform-origin: right;
-}
-
-.app-footer a:hover::after {
-  transform: scaleX(1);
-  transform-origin: left;
+.footer-copy-right {
+  color: var(--mid);
+  opacity: 0.7;
 }
 
 /* ================================================================
