@@ -59,7 +59,7 @@ async function saveToSupabase() {
       youtube_api_key: state.data.apiKey,
       filter_shorts: state.data.filterShorts,
       share_stats: state.data.shareStats,
-      updated_at: new Date().toISOString()
+      updated_at: state.data.lastUpdated   // match local timestamp to avoid false conflicts
     });
     if (errSettings) throw errSettings;
 
@@ -106,12 +106,13 @@ async function saveToSupabase() {
 
     const channelsToInsert = [];
     state.data.profiles.forEach(p => {
-      p.channels.forEach(c => {
+      p.channels.forEach((c, idx) => {
         channelsToInsert.push({
           profile_id: p.id,
           youtube_channel_id: c.id,
           title: c.name,
           thumbnail_url: c.thumbnail || '',
+          sort_order: idx,
         });
       });
     });
@@ -135,7 +136,7 @@ async function downloadFromSupabase() {
   try {
     const { data: settings } = await supabase.from('kiddolens_user_settings').select('*').single();
     const { data: profiles } = await supabase.from('kiddolens_profiles').select('*');
-    const { data: channels } = await supabase.from('kiddolens_channels').select('*');
+    const { data: channels } = await supabase.from('kiddolens_channels').select('*').order('sort_order', { ascending: true });
 
     if (!settings && (!profiles || profiles.length === 0)) return null; // No data
 
@@ -214,63 +215,15 @@ function updateLastSyncedUI() {
 function applyCloudData(driveConfig) {
   state.isApplyingCloudData = true;
   state.data = driveConfig;
-  saveLocalData(); // persists to localStorage only (flag blocks Drive upload)
+  saveLocalData(); // persists to localStorage only (flag blocks cloud upload)
   state.isApplyingCloudData = false;
   updateProfileUI();
-  renderChannelList();
-  if (state.data.apiKey) {
-    fetchAllVideos(true);
-    setTimeout(fetchMissingChannelIcons, 1000);
-  }
+  renderChannelNav();    // refresh channel nav bar with cloud channels
+  renderChannelList();   // null-guarded; no-op if element removed
+  fetchAllVideos(true);  // always refresh videos regardless of API key
+  setTimeout(fetchMissingChannelIcons, 1000);
 }
 
-/**
- * Shows a conflict resolution dialog when both sides have real data.
- * Returns a Promise that resolves to 'local' or 'cloud'.
- */
-function showSyncConflictDialog(localData, cloudData) {
-  return new Promise((resolve) => {
-    const countChannels = (d) => (d.profiles || []).reduce((s, p) => s + (p.channels?.length || 0), 0);
-    const countProfiles = (d) => (d.profiles || []).length;
-    const formatDate = (iso) => {
-      if (!iso) return '—';
-      try {
-        return new Date(iso).toLocaleString(state.lang === 'zh' ? 'zh-TW' : 'en-US',
-          { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-      } catch { return iso; }
-    };
-
-    const modal = document.createElement('div');
-    modal.className = 'modal-overlay sync-conflict-overlay';
-    modal.innerHTML = `
-      <div class="modal-content glass sync-conflict-modal">
-        <h3>☁️ ${t('sync_conflict_title')}</h3>
-        <p class="small-text" style="margin-bottom:16px">${t('sync_conflict_desc')}</p>
-        <div class="sync-conflict-cards">
-          <div class="sync-card sync-card--local">
-            <div class="sync-card__header">${t('sync_this_device')}</div>
-            <div class="sync-card__stat">${t('sync_conflict_profiles', { count: countProfiles(localData) })}</div>
-            <div class="sync-card__stat">${t('sync_conflict_channels', { count: countChannels(localData) })}</div>
-            <div class="sync-card__date">${t('sync_conflict_modified', { date: formatDate(localData.lastUpdated) })}</div>
-            <button class="primary-btn sync-card__btn" id="sync-choose-local">${t('sync_use_local')}</button>
-          </div>
-          <div class="sync-vs">VS</div>
-          <div class="sync-card sync-card--cloud">
-            <div class="sync-card__header">${t('sync_cloud_label')}</div>
-            <div class="sync-card__stat">${t('sync_conflict_profiles', { count: countProfiles(cloudData) })}</div>
-            <div class="sync-card__stat">${t('sync_conflict_channels', { count: countChannels(cloudData) })}</div>
-            <div class="sync-card__date">${t('sync_conflict_modified', { date: formatDate(cloudData.lastUpdated) })}</div>
-            <button class="secondary-btn sync-card__btn" id="sync-choose-cloud">${t('sync_use_cloud')}</button>
-          </div>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-
-    document.getElementById('sync-choose-local').onclick = () => { modal.remove(); resolve('local'); };
-    document.getElementById('sync-choose-cloud').onclick = () => { modal.remove(); resolve('cloud'); };
-  });
-}
 
 // Old implementations removed. Using the new ones at the top.
 const GOOGLE_CLIENT_ID = '959694478718-pksctjg2pbmtd1fnvp9geha2imqbi72j.apps.googleusercontent.com';
@@ -478,6 +431,16 @@ function setupSupabaseAuth() {
 
     // Automatically sync when user logs in
     if (event === 'SIGNED_IN') {
+      // If a different user was previously logged in on this device, clear local data
+      // to prevent their channels from being uploaded to the new user's account.
+      const prevUid = localStorage.getItem('kiddolens_uid');
+      if (prevUid && prevUid !== state.user.id) {
+        console.log('New user detected — clearing local data to prevent cross-user contamination.');
+        state.data = JSON.parse(JSON.stringify(DEFAULT_DATA));
+        saveLocalData();
+      }
+      localStorage.setItem('kiddolens_uid', state.user.id);
+
       syncWithSupabase();
       checkAndUploadStats(true); // Anonymous stats
     }
@@ -485,7 +448,12 @@ function setupSupabaseAuth() {
 }
 
 function handleLogin() {
-  supabase.auth.signInWithOAuth({ provider: 'google' });
+  supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin + window.location.pathname
+    }
+  });
 }
 
 function handleLogout() {
@@ -627,17 +595,10 @@ async function syncWithSupabase() {
     return;
   }
 
-  // Cloud is newer → ask user which version to keep
-  console.log('Sync: Cloud is newer — showing conflict dialog.');
-  const choice = await showSyncConflictDialog(state.data, dbConfig);
-  if (choice === 'cloud') {
-    applyCloudData(dbConfig);
-    showSyncToast(t('sync_restored'));
-  } else {
-    // User chose to keep local → push it to cloud
-    await saveToSupabase();
-    showSyncToast(t('sync_backed_up'));
-  }
+  // Cloud is newer → automatically use cloud data (Supabase is authoritative)
+  console.log('Sync: Cloud is newer — restoring from cloud.');
+  applyCloudData(dbConfig);
+  showSyncToast(t('sync_restored'));
   state.lastSyncedAt = new Date().toISOString();
   updateLastSyncedUI();
 }
@@ -1494,26 +1455,22 @@ function getSortedVideos(videos) {
 // --- Icon Auto-Fetch ---
 async function fetchMissingChannelIcons() {
   const profile = getCurrentProfile();
-  // Find channels without thumbnails
   let missingIcons = profile.channels.filter(c => !c.thumbnail);
-  if (missingIcons.length === 0) return;
+  if (missingIcons.length === 0) return; // all thumbnails present (loaded from Supabase) — done
 
-  // Option 1: Official YouTube API (if key exists)
+  // Option 1: YouTube Data API — one batch request for all missing channels
   if (state.data.apiKey) {
-    console.log(`Fetching icons via YouTube API for ${missingIcons.length} channels...`);
     const ids = missingIcons.map(c => c.id).join(',');
-    const url = `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`;
     try {
-      const res = await fetch(url);
+      const res = await fetch(
+        `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`
+      );
       const data = await res.json();
       if (data.items) {
         let updated = false;
         data.items.forEach(item => {
-          const channel = profile.channels.find(c => c.id === item.id);
-          if (channel) {
-            channel.thumbnail = item.snippet.thumbnails.default?.url;
-            updated = true;
-          }
+          const ch = profile.channels.find(c => c.id === item.id);
+          if (ch) { ch.thumbnail = item.snippet.thumbnails.default?.url; updated = true; }
         });
         if (updated) finalizeIconUpdate();
       }
@@ -1522,65 +1479,20 @@ async function fetchMissingChannelIcons() {
     }
   }
 
-  // Recheck what's still missing
+  // Option 2: Rankings cache — uses _rankingsCache if already fetched (zero extra network calls),
+  // otherwise one shared request. No CORS proxy, no per-channel scraping.
   missingIcons = profile.channels.filter(c => !c.thumbnail);
   if (missingIcons.length === 0) return;
-
-  // Option 2: Ranking API Fallback (Google Sheet)
   try {
-    console.log(`Fetching icons via Google Sheet (Rankings) for ${missingIcons.length} channels...`);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
-
-    // Append timestamp to avoid caching
-    const response = await fetch(STATS_ENDPOINT + '?action=getRankings&t=' + Date.now(), { signal: controller.signal });
-    clearTimeout(timeoutId);
-
-    const data = await response.json();
-    if (data.channels) {
-      let updated = false;
-      missingIcons.forEach(missing => {
-        // Strict ID Match Only (User Request)
-        const match = data.channels.find(rank => rank.id === missing.id);
-
-        if (match && match.thumbnail) {
-          console.log(`Found icon for ${missing.name}: ${match.thumbnail}`);
-          missing.thumbnail = match.thumbnail;
-          updated = true;
-        }
-      });
-      if (updated) finalizeIconUpdate();
-    }
+    const rankings = await fetchRankingsRaw(); // cached — free on subsequent calls
+    let updated = false;
+    missingIcons.forEach(missing => {
+      const match = rankings.find(r => r.id === missing.id);
+      if (match?.thumbnail) { missing.thumbnail = match.thumbnail; updated = true; }
+    });
+    if (updated) finalizeIconUpdate();
   } catch (e) {
-    console.warn('Google Sheet icon fetch failed', e);
-  }
-
-  // Recheck what's still missing
-  missingIcons = profile.channels.filter(c => !c.thumbnail);
-  if (missingIcons.length === 0) return;
-
-  // Option 3: Scrape YouTube channel page for og:image via CORS proxy
-  console.log(`Scraping YouTube pages for ${missingIcons.length} channel icons...`);
-  for (const channel of missingIcons) {
-    try {
-      const pageUrl = `https://www.youtube.com/channel/${channel.id}`;
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(pageUrl)}`;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-      const res = await fetch(proxyUrl, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      const data = await res.json();
-      if (data.contents) {
-        // Extract og:image from HTML
-        const match = data.contents.match(/<meta\s+property="og:image"\s+content="([^"]+)"/);
-        if (match && match[1]) {
-          channel.thumbnail = match[1];
-          finalizeIconUpdate();
-        }
-      }
-    } catch (e) {
-      console.warn(`Page scrape failed for ${channel.name}`, e);
-    }
+    console.warn('Rankings icon fallback failed', e);
   }
 }
 
@@ -1700,6 +1612,27 @@ function renderChannelNav() {
   allBtn.onclick = () => filterVideos(null);
   channelNav.appendChild(allBtn);
 
+  // "管理頻道" button — right after "所有影片", before individual channels
+  const manageBtn = document.createElement('div');
+  manageBtn.className = 'nav-item nav-item-add';
+  manageBtn.title = '管理頻道';
+  manageBtn.innerHTML = `
+    <div class="nav-add-circle">
+      <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24"
+        fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="4" y1="6" x2="20" y2="6"/>
+        <circle cx="8" cy="6" r="2.5" fill="currentColor" stroke="none"/>
+        <line x1="4" y1="12" x2="20" y2="12"/>
+        <circle cx="16" cy="12" r="2.5" fill="currentColor" stroke="none"/>
+        <line x1="4" y1="18" x2="20" y2="18"/>
+        <circle cx="8" cy="18" r="2.5" fill="currentColor" stroke="none"/>
+      </svg>
+    </div>
+    <span>管理頻道</span>
+  `;
+  manageBtn.onclick = () => showAddChannelModal();
+  channelNav.appendChild(manageBtn);
+
   // Channel Buttons
   profile.channels.forEach(channel => {
     const btn = document.createElement('div');
@@ -1722,22 +1655,6 @@ function renderChannelNav() {
     channelNav.appendChild(btn);
   });
 
-  // "+" Add Channel button at the end of nav
-  const addBtn = document.createElement('div');
-  addBtn.className = 'nav-item nav-item-add';
-  addBtn.title = '新增頻道';
-  addBtn.innerHTML = `
-    <div class="nav-add-circle">
-      <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none"
-        stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="12" y1="5" x2="12" y2="19"></line>
-        <line x1="5" y1="12" x2="19" y2="12"></line>
-      </svg>
-    </div>
-    <span>新增</span>
-  `;
-  addBtn.onclick = () => showAddChannelModal();
-  channelNav.appendChild(addBtn);
 }
 
 function filterVideos(channelId) {
@@ -3181,12 +3098,11 @@ function renderManageChannelList(listEl) {
     return;
   }
 
-  let dragSrcIndex = null;
-
-  profile.channels.forEach((channel, index) => {
+  // ── Render items ──
+  profile.channels.forEach((channel) => {
     const li = document.createElement('li');
     li.className = 'manage-channel-item';
-    li.draggable = true;
+    li.dataset.id = channel.id;
     const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&size=64&background=random&rounded=true`;
     li.innerHTML = `
       <span class="drag-handle" title="拖曳排序">⠿</span>
@@ -3195,11 +3111,9 @@ function renderManageChannelList(listEl) {
       <span class="manage-channel-name">${channel.name}</span>
       <button class="manage-channel-delete" title="移除頻道">✕</button>
     `;
-
-    // Delete
     li.querySelector('.manage-channel-delete').onclick = (e) => {
       e.stopPropagation();
-      profile.channels.splice(index, 1);
+      profile.channels = profile.channels.filter(c => c.id !== channel.id);
       saveLocalData();
       renderChannelNav();
       fetchAllVideos();
@@ -3207,29 +3121,59 @@ function renderManageChannelList(listEl) {
       const modal = document.getElementById('add-channel-modal');
       if (modal?._renderBothGrids) modal._renderBothGrids(modal._channelsCache || [...CURATED_CHANNELS]);
     };
-
-    // Drag reorder
-    li.addEventListener('dragstart', (e) => {
-      dragSrcIndex = index;
-      e.dataTransfer.effectAllowed = 'move';
-      setTimeout(() => li.classList.add('dragging'), 0);
-    });
-    li.addEventListener('dragend', () => li.classList.remove('dragging'));
-    li.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
-    li.addEventListener('drop', (e) => {
-      e.preventDefault();
-      if (dragSrcIndex === null || dragSrcIndex === index) return;
-      const channels = profile.channels;
-      const [moved] = channels.splice(dragSrcIndex, 1);
-      channels.splice(index, 0, moved);
-      dragSrcIndex = null;
-      saveLocalData();
-      renderChannelNav();
-      renderManageChannelList(listEl);
-    });
-
     listEl.appendChild(li);
   });
+
+  // ── Pointer Events drag-to-sort: works on both mouse and touch ──
+  let dragEl = null;
+
+  function saveDomOrder() {
+    const newOrder = [];
+    listEl.querySelectorAll('.manage-channel-item[data-id]').forEach(item => {
+      const ch = profile.channels.find(c => c.id === item.dataset.id);
+      if (ch) newOrder.push(ch);
+    });
+    profile.channels = newOrder;
+    saveLocalData();
+    renderChannelNav();
+  }
+
+  listEl.addEventListener('pointerdown', (e) => {
+    if (!e.target.closest('.drag-handle')) return;
+    const li = e.target.closest('.manage-channel-item');
+    if (!li) return;
+    e.preventDefault();
+    dragEl = li;
+    // Capture on the list so pointermove keeps firing even when finger leaves an item
+    listEl.setPointerCapture(e.pointerId);
+    li.classList.add('dragging');
+  });
+
+  listEl.addEventListener('pointermove', (e) => {
+    if (!dragEl) return;
+    e.preventDefault();
+    // Temporarily disable pointer-events on dragEl so elementFromPoint looks through it
+    dragEl.style.pointerEvents = 'none';
+    const below = document.elementFromPoint(e.clientX, e.clientY);
+    dragEl.style.pointerEvents = '';
+    const target = below?.closest('.manage-channel-item');
+    if (!target || target === dragEl) return;
+    const rect = target.getBoundingClientRect();
+    if (e.clientY < rect.top + rect.height / 2) {
+      target.before(dragEl);
+    } else {
+      target.after(dragEl);
+    }
+  });
+
+  const endDrag = () => {
+    if (!dragEl) return;
+    dragEl.classList.remove('dragging');
+    dragEl = null;
+    saveDomOrder();
+  };
+  listEl.addEventListener('pointerup',     endDrag);
+  listEl.addEventListener('pointercancel', endDrag);
 }
 
 function renderRecGrid(grid, channels, addedIds) {

@@ -53,7 +53,7 @@ export const translations = {
     api_help_step5: { en: "Copy the key and paste it here!", zh: "複製金鑰並貼到這裡！" },
     full_tutorial: { en: "Full Tutorial ↗", zh: "完整教學 ↗" },
     security_note_title: { en: "Security Note:", zh: "安全提醒：" },
-    security_note_text: { en: "Your API Key is stored ONLY on this device. If you switch devices, you will need to enter it again.", zh: "您的 API 金鑰僅儲存在此裝置上。如果您更換裝置，則需要重新輸入。" },
+    security_note_text: { en: "Your API Key is stored in your private cloud account and synced across your devices. Only you can access it. Tip: in Google Cloud Console, restrict the key to evelynytliu.github.io for extra safety.", zh: "您的 API 金鑰儲存在您的私人雲端帳戶中並同步至各裝置，只有您能存取。建議在 Google Cloud Console 將金鑰限制為 evelynytliu.github.io，以提升安全性。" },
     save_settings: { en: "Save Settings", zh: "儲存設定" },
     status_lite_active: { en: "🎈 Lite Mode Active!", zh: "🎈 輕量模式已啟動！" },
     status_pro_active: { en: "🚀 Pro Mode Activated!", zh: "🚀 專業模式已啟動！" },
