@@ -1912,27 +1912,80 @@ input[type="checkbox"] {
   }
 }
 
+.wizard-branding {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 6px;
+}
+
+.wizard-logo {
+  width: 56px;
+  height: auto;
+}
+
+.wizard-step-dots {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.wizard-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #dde5f5;
+  transition: background 0.3s, width 0.3s, border-radius 0.3s;
+}
+
+.wizard-dot.active {
+  background: var(--primary);
+  width: 22px;
+  border-radius: 4px;
+}
+
 .wizard-step-title {
-  font-size: 1.4rem;
+  font-size: 1.35rem;
   font-weight: 800;
   text-align: center;
   color: inherit;
 }
 
 .wizard-desc {
-  font-size: 0.95rem;
-  opacity: 0.75;
+  font-size: 0.93rem;
+  opacity: 0.70;
   text-align: center;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
-.wizard-link-restore {
+.wizard-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 0;
+  color: #aab4cc;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.wizard-divider::before,
+.wizard-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #eef0f8;
+}
+
+.wizard-skip-note {
   text-align: center;
+  font-size: 0.82rem;
+  color: #aab4cc;
   margin-top: 14px;
-  font-size: 0.88rem;
-  color: var(--primary);
-  text-decoration: underline;
-  cursor: pointer;
+  font-weight: 500;
+  line-height: 1.5;
 }
 
 .wizard-input-group {
@@ -2250,7 +2303,7 @@ input[type="checkbox"] {
   gap: 10px;
   width: 100%;
   transition: background 0.2s, border-color 0.2s;
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .wizard-btn-google:hover {

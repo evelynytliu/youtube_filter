@@ -39,12 +39,13 @@ export const translations = {
     welcome_desc: { en: "Let's create a safe space for your child.", zh: "讓我們為您的孩子建立一個安全的觀看空間。" },
     step1_label: { en: "Child's Name:", zh: "孩子的名字：" },
     step1_placeholder: { en: "e.g. Joy", zh: "例如：小寶" },
-    step2_label: { en: "Pick some channels to start:", zh: "選擇一些推薦頻道：" },
+    step2_label: { en: "Pick channels for {name}:", zh: "為 {name} 選擇頻道：" },
     loading_recommendations: { en: "Loading safe channels...", zh: "正在載入安全頻道..." },
     finish_setup: { en: "Start Watching! 🚀", zh: "開始觀看！🚀" },
-    next_step: { en: "Next", zh: "下一步" },
-    restore_backup: { en: "Already have data? Login to Sync", zh: "已有資料？登入以同步" },
-    setup_login_note: { en: "Tip: Login later to sync across devices.", zh: "提示：稍後登入以跨裝置同步設定。" },
+    next_step: { en: "Next →", zh: "下一步 →" },
+    restore_backup: { en: "Sign in with Google to restore my backup", zh: "用 Google 帳號還原我的備份" },
+    wizard_already_have: { en: "Already using KiddoLens on another device?", zh: "已在其他裝置使用 KiddoLens？" },
+    setup_login_note: { en: "You can add more channels anytime. Login to sync across devices.", zh: "隨時可以新增更多頻道。登入後可跨裝置同步。" },
 
     // Tooltips & Status
     onboarding_login_tooltip: { en: "✨ Setup complete! Login with Google to back up your list and sync across devices.", zh: "✨ 設定完成！使用 Google 登入來備份清單並跨裝置同步。" },

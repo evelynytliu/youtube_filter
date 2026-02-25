@@ -104,21 +104,44 @@ async function saveToSupabase() {
       }
     }
 
+    // 3a. Upsert shared channel metadata (de-duplicated by youtube_channel_id)
+    const channelInfoMap = new Map();
+    state.data.profiles.forEach(p => {
+      p.channels.forEach(c => {
+        if (!channelInfoMap.has(c.id)) {
+          channelInfoMap.set(c.id, {
+            youtube_channel_id: c.id,
+            title: c.name,
+            thumbnail_url: c.thumbnail || '',
+            updated_at: new Date().toISOString()
+          });
+        }
+      });
+    });
+    const channelInfoToUpsert = [...channelInfoMap.values()];
+    if (channelInfoToUpsert.length > 0) {
+      const { error: errInfo } = await supabase
+        .from('kiddolens_channel_info')
+        .upsert(channelInfoToUpsert, { onConflict: 'youtube_channel_id' });
+      if (errInfo) throw errInfo;
+    }
+
+    // 3b. Upsert lean join rows (profile ↔ channel, with sort order only)
     const channelsToInsert = [];
     state.data.profiles.forEach(p => {
       p.channels.forEach((c, idx) => {
         channelsToInsert.push({
           profile_id: p.id,
           youtube_channel_id: c.id,
-          title: c.name,
-          thumbnail_url: c.thumbnail || '',
           sort_order: idx,
         });
       });
     });
 
     if (channelsToInsert.length > 0) {
-      const { error: errChan } = await supabase.from('kiddolens_channels').upsert(channelsToInsert, { onConflict: 'profile_id, youtube_channel_id' });
+      const { error: errChan } = await supabase
+        .from('kiddolens_channels')
+        .upsert(channelsToInsert, { onConflict: 'profile_id, youtube_channel_id' });
       if (errChan) throw errChan;
     }
 
@@ -136,7 +159,11 @@ async function downloadFromSupabase() {
   try {
     const { data: settings } = await supabase.from('kiddolens_user_settings').select('*').single();
     const { data: profiles } = await supabase.from('kiddolens_profiles').select('*');
-    const { data: channels } = await supabase.from('kiddolens_channels').select('*').order('sort_order', { ascending: true });
+    // JOIN kiddolens_channels with kiddolens_channel_info to get metadata in one query
+    const { data: channels } = await supabase
+      .from('kiddolens_channels')
+      .select('profile_id, youtube_channel_id, sort_order, kiddolens_channel_info(title, thumbnail_url)')
+      .order('sort_order', { ascending: true });
 
     if (!settings && (!profiles || profiles.length === 0)) return null; // No data
 
@@ -151,8 +178,8 @@ async function downloadFromSupabase() {
         avatar: p.avatar,
         channels: (channels || []).filter(c => c.profile_id === p.id).map(c => ({
           id: c.youtube_channel_id,
-          name: c.title,
-          thumbnail: c.thumbnail_url
+          name: c.kiddolens_channel_info?.title || '',
+          thumbnail: c.kiddolens_channel_info?.thumbnail_url || ''
         }))
       })),
       lastUpdated: settings?.updated_at || new Date().toISOString()
@@ -431,13 +458,16 @@ function setupSupabaseAuth() {
 
     // Automatically sync when user logs in
     if (event === 'SIGNED_IN') {
-      // If a different user was previously logged in on this device, clear local data
-      // to prevent their channels from being uploaded to the new user's account.
+      // If a different user was previously logged in on this device, reload the page
+      // so init() runs fresh for the new user (shows wizard if they have no data, or restores their backup).
       const prevUid = localStorage.getItem('kiddolens_uid');
       if (prevUid && prevUid !== state.user.id) {
-        console.log('New user detected — clearing local data to prevent cross-user contamination.');
+        console.log('New user detected — reloading for a fresh session.');
         state.data = JSON.parse(JSON.stringify(DEFAULT_DATA));
         saveLocalData();
+        localStorage.setItem('kiddolens_uid', state.user.id);
+        location.reload();
+        return;
       }
       localStorage.setItem('kiddolens_uid', state.user.id);
 
@@ -631,7 +661,7 @@ function startApp() {
   fetchAllVideos();
 }
 
-function init() {
+async function init() {
   loadLocalData();
 
   // Check if first-time setup is needed
@@ -640,6 +670,24 @@ function init() {
     // Hide spinner immediately for wizard text clarity
     const spinner = document.querySelector('.loading-state');
     if (spinner) spinner.style.display = 'none';
+
+    // Before showing wizard: check if Supabase has an active session.
+    // This happens after the Google OAuth redirect or if the user was previously logged in.
+    // If they have cloud data, restore it silently instead of showing the wizard again.
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        state.user = session.user;
+        localStorage.setItem('kiddolens_uid', session.user.id);
+        const dbConfig = await downloadFromSupabase();
+        if (dbConfig && hasMeaningfulData(dbConfig)) {
+          // Returning user with cloud backup — restore and bypass wizard
+          applyCloudData(dbConfig);
+          startApp();
+          return;
+        }
+      }
+    } catch (e) { console.warn('Pre-wizard session check failed:', e); }
 
     showOnboardingWizard();
     return; // Pause init until wizard finishes
@@ -1511,19 +1559,22 @@ async function fetchRankingsRaw() {
   if (_rankingsCache) return _rankingsCache;
   if (_rankingsFetchPromise) return _rankingsFetchPromise;
 
-  _rankingsFetchPromise = fetch(STATS_ENDPOINT + '?action=getRankings')
-    .then(r => r.json())
-    .then(data => {
-      const channels = (data.channels && Array.isArray(data.channels)) ? data.channels : [];
-      _rankingsCache = channels.length > 0 ? channels : [...CURATED_CHANNELS];
-      _rankingsFetchPromise = null;
-      return _rankingsCache;
-    })
-    .catch(e => {
-      console.warn('Failed to fetch rankings', e);
-      _rankingsFetchPromise = null;
-      return [...CURATED_CHANNELS];
-    });
+  const run = async () => {
+    try {
+      const { data, error } = await supabase.rpc('get_channel_rankings');
+      if (error) throw new Error(error.message);
+      if (data && data.length > 0) return data;
+    } catch (e) {
+      console.warn('Supabase rankings fetch failed, using curated fallback:', e);
+    }
+    return [...CURATED_CHANNELS];
+  };
+
+  _rankingsFetchPromise = run().then(result => {
+    _rankingsCache = result;
+    _rankingsFetchPromise = null;
+    return result;
+  });
 
   return _rankingsFetchPromise;
 }
@@ -2604,35 +2655,43 @@ async function showOnboardingWizard() {
 
   modal.innerHTML = `
     <div class="wizard-content">
+
+      <!-- Branding header -->
+      <div class="wizard-branding">
+        <img src="logo.svg" class="wizard-logo" alt="KiddoLens" />
+        <div class="wizard-step-dots">
+          <span class="wizard-dot active" id="wizard-dot-1"></span>
+          <span class="wizard-dot" id="wizard-dot-2"></span>
+        </div>
+      </div>
+
+      <!-- Step 1: Enter child's name -->
       <div class="wizard-step" id="wizard-step-1">
         <h2 class="wizard-step-title">${t('welcome_title')}</h2>
         <p class="wizard-desc">${t('welcome_desc')}</p>
-        
+
         <div class="wizard-input-group">
           <label>${t('step1_label')}</label>
           <input type="text" id="wizard-child-name" placeholder="${t('step1_placeholder')}" autofocus autocomplete="off" />
         </div>
 
-        <button class="wizard-btn-primary" id="wizard-next-btn" disabled>${t('next_step') || 'Next'}</button>
-        
-        <div style="display:flex; align-items:center; margin: 20px 0; color:#ccc; font-size:0.8rem; font-weight:600;">
-            <div style="flex:1; height:1px; background:#eee;"></div>
-            <span style="padding:0 10px;">OR</span>
-            <div style="flex:1; height:1px; background:#eee;"></div>
-        </div>
+        <button class="wizard-btn-primary" id="wizard-next-btn" disabled>${t('next_step')}</button>
 
+        <div class="wizard-divider"><span>${t('wizard_already_have')}</span></div>
         <div id="wizard-google-container"></div>
       </div>
 
+      <!-- Step 2: Pick channels -->
       <div class="wizard-step" id="wizard-step-2" style="display:none;">
-        <h2 class="wizard-step-title">${t('step2_label')}</h2>
-        
+        <h2 class="wizard-step-title" id="wizard-step2-title">${t('step2_label', { name: '...' })}</h2>
+
         <div id="channel-loading" class="channel-loading-area">${t('loading_recommendations')}</div>
         <div class="wizard-channel-grid" id="wizard-channel-grid"></div>
 
         <button class="wizard-btn-primary" id="wizard-finish-btn">${t('finish_setup')}</button>
-        <div class="wizard-skip" id="wizard-login-note" style="margin-top:20px; font-weight:bold; color:var(--primary-color); font-size: 0.9rem; text-align: center;">${t('setup_login_note')}</div>
+        <p class="wizard-skip-note">${t('setup_login_note')}</p>
       </div>
+
     </div>
   `;
   document.body.appendChild(modal);
@@ -2670,8 +2729,14 @@ async function showOnboardingWizard() {
     const name = nameInput.value.trim();
     if (!name) return;
 
-    // Update local profile name temporarily
+    // Save name to profile
     state.data.profiles[0].name = name;
+
+    // Personalize step 2 title and advance step dot
+    const step2Title = modal.querySelector('#wizard-step2-title');
+    if (step2Title) step2Title.textContent = t('step2_label', { name });
+    const dot2 = modal.querySelector('#wizard-dot-2');
+    if (dot2) dot2.classList.add('active');
 
     // Switch to Step 2
     step1.style.display = 'none';
