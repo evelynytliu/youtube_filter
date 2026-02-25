@@ -159,11 +159,23 @@ async function downloadFromSupabase() {
   try {
     const { data: settings } = await supabase.from('kiddolens_user_settings').select('*').single();
     const { data: profiles } = await supabase.from('kiddolens_profiles').select('*');
-    // JOIN kiddolens_channels with kiddolens_channel_info to get metadata in one query
-    const { data: channels } = await supabase
+
+    // Query 1: get user's channel relationships (which profile has which channel, in what order)
+    const { data: profileChannels } = await supabase
       .from('kiddolens_channels')
-      .select('profile_id, youtube_channel_id, sort_order, kiddolens_channel_info(title, thumbnail_url)')
+      .select('profile_id, youtube_channel_id, sort_order')
       .order('sort_order', { ascending: true });
+
+    // Query 2: get metadata for those specific channels (name, thumbnail)
+    const channelInfoMap = {};
+    const channelIds = [...new Set((profileChannels || []).map(c => c.youtube_channel_id))];
+    if (channelIds.length > 0) {
+      const { data: channelInfos } = await supabase
+        .from('kiddolens_channel_info')
+        .select('youtube_channel_id, title, thumbnail_url')
+        .in('youtube_channel_id', channelIds);
+      (channelInfos || []).forEach(ci => { channelInfoMap[ci.youtube_channel_id] = ci; });
+    }
 
     if (!settings && (!profiles || profiles.length === 0)) return null; // No data
 
@@ -176,11 +188,13 @@ async function downloadFromSupabase() {
         id: p.id,
         name: p.name,
         avatar: p.avatar,
-        channels: (channels || []).filter(c => c.profile_id === p.id).map(c => ({
-          id: c.youtube_channel_id,
-          name: c.kiddolens_channel_info?.title || '',
-          thumbnail: c.kiddolens_channel_info?.thumbnail_url || ''
-        }))
+        channels: (profileChannels || [])
+          .filter(c => c.profile_id === p.id)
+          .map(c => ({
+            id: c.youtube_channel_id,
+            name: channelInfoMap[c.youtube_channel_id]?.title || '',
+            thumbnail: channelInfoMap[c.youtube_channel_id]?.thumbnail_url || ''
+          }))
       })),
       lastUpdated: settings?.updated_at || new Date().toISOString()
     };
@@ -680,7 +694,7 @@ async function init() {
         state.user = session.user;
         localStorage.setItem('kiddolens_uid', session.user.id);
         const dbConfig = await downloadFromSupabase();
-        if (dbConfig && hasMeaningfulData(dbConfig)) {
+        if (dbConfig && dbConfig.profiles?.some(p => p.name)) {
           // Returning user with cloud backup — restore and bypass wizard
           applyCloudData(dbConfig);
           startApp();
