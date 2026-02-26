@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_圖層_1" xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 328.12 238.24">
+  <!-- Generator: Adobe Illustrator 30.2.1, SVG Export Plug-In . SVG Version: 2.1.1 Build 1)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: url(#_未命名漸層_130);
+      }
+
+      .st1 {
+        fill: #80af4c;
+      }
+
+      .st2 {
+        fill: #355dce;
+      }
+    </style>
+    <radialGradient id="_未命名漸層_130" data-name="未命名漸層 130" cx="191.33" cy="119.28" fx="191.33" fy="119.28" r="95.71" gradientTransform="translate(.62 -121.63) rotate(.15) scale(1 2.02)" gradientUnits="userSpaceOnUse">
+      <stop offset=".38" stop-color="#facd40"/>
+      <stop offset=".43" stop-color="#facd40" stop-opacity=".96"/>
+      <stop offset=".51" stop-color="#facd40" stop-opacity=".86"/>
+      <stop offset=".62" stop-color="#facd40" stop-opacity=".69"/>
+      <stop offset=".75" stop-color="#facd40" stop-opacity=".46"/>
+      <stop offset=".89" stop-color="#facd40" stop-opacity=".17"/>
+      <stop offset=".97" stop-color="#facd40" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path class="st2" d="M100.23,229.61c-18.77,0-30.88-9.06-33.97-24.01-4.93-23.78-5.27-149.96,0-173.11,3-13.16,15.21-24.01,33.97-24.01s32.12,7.39,33.97,24.01c5.44,48.67,3.7,157.44,0,173.11-4.47,18.89-15.21,24.01-33.97,24.01Z"/>
+  <path class="st0" d="M111.62,93.71c19.91-21.35,91.02-69.74,116.27-80.95,23.85-10.58,51.28-4.08,53.87,25.22s3.33,135.03,0,161.91c-3.33,26.88-23.39,38.36-53.87,25.22-27.73-11.95-97.35-61.27-116.27-80.95-17.25-17.95-17.3-31.91,0-50.45h0Z"/>
+  <path class="st1" d="M111.62,93.71h0c-17.3,18.53-17.25,32.49,0,50.44,5.24,5.45,14.36,13.17,25.4,21.73.85-27.21.94-63.27-.2-93.95-10.83,8.38-19.86,16.05-25.2,21.78Z"/>
+</svg>

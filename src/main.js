@@ -18,6 +18,7 @@ const INTEREST_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // 14 days in ms
 const MAX_WATCH_HISTORY = 50;
 const STORAGE_KEY_WATCH_TIME = 'safetube_watch_time_'; // Per-profile per day: + profileId_YYYY-MM-DD
 import { createClient } from '@supabase/supabase-js';
+import { getMockData } from './mockData.js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -320,7 +321,7 @@ let state = {
   data: DEFAULT_DATA,
   videos: [],
   user: null, // Track Supabase logged-in user
-  lang: localStorage.getItem(STORAGE_KEY_LANG) || (navigator.language?.startsWith('zh') ? 'zh' : 'en'),
+  lang: 'zh', // Lock app to Traditional Chinese
   channelNextPageTokens: {}, // Track pagination per channel for "Load More"
   currentSort: 'shuffle',    // Default to shuffle
   isApplyingCloudData: false, // Prevents save-loop when applying downloaded cloud data
@@ -419,19 +420,6 @@ function updateLanguageUI() {
     <strong>${t('pro_mode')}:</strong> ${t('pro_filter_desc')}
   `;
 
-  // Participate in Ranking
-  sections[4].querySelector('span').textContent = t('participate_ranking');
-  sections[4].querySelector('.small-text').textContent = t('ranking_desc');
-
-  // Gate Modal
-  document.querySelector('#gate-modal h3').textContent = t('parents_only');
-  document.getElementById('gate-submit').textContent = t('unlock');
-
-  // Update active state of buttons
-  document.querySelectorAll('.lang-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.lang === state.lang);
-  });
-
   // Footer
   const footerText = document.getElementById('footer-text');
   if (footerText) footerText.textContent = t('footer_made_by');
@@ -446,7 +434,6 @@ function updateLanguageUI() {
 const videoContainer = document.getElementById('video-container');
 const settingsModal = document.getElementById('settings-modal');
 const playerModal = document.getElementById('player-modal');
-const gateModal = document.getElementById('gate-modal');
 const apiKeyInput = document.getElementById('api-key-input');
 const channelList = document.getElementById('channel-list');
 const apiStatus = document.getElementById('api-status');
@@ -814,9 +801,49 @@ function getCurrentProfile() {
 
 // --- Video Fetching ---
 const CORS_PROXY = 'https://api.allorigins.win/get?url=';
-
-// --- Video Fetching ---
 const CACHE_DURATION = 1000 * 60 * 60; // 1 Hour
+
+// --- Optimized API Fetcher (Mock & Cache) ---
+// Cost-saving wrapper for all YouTube API calls
+async function ytFetch(url, forceNetwork = false) {
+  // 1. Mock Mode (100% Free - local development only)
+  if (import.meta.env.VITE_USE_MOCK_YOUTUBE_API === 'true') {
+    console.log('[Mock Mode] Simulating API call:', url.split('?')[0]);
+    return await getMockData(url);
+  }
+
+  // 2. Cache Mode (Save Quota on repeated requests - Valid for 24h)
+  const cacheKey = `yt_api_cache_${btoa(url)}`; // Base64 encode URL for safe key
+  const cachedStr = localStorage.getItem(cacheKey);
+
+  if (cachedStr && !forceNetwork) {
+    try {
+      const { timestamp, data } = JSON.parse(cachedStr);
+      const ageHours = (Date.now() - timestamp) / (1000 * 60 * 60);
+      if (ageHours < 24) {
+        console.log('[API Cache Hit] Saved quota for:', url.split('?')[0]);
+        return data; // Return cached JSON
+      }
+    } catch (e) { console.warn('ytFetch cache parse error'); }
+  }
+
+  // 3. Network Request (Costs Quota)
+  console.log('[API Net Req] Fetching:', url.split('?')[0]);
+  const res = await fetch(url);
+  const data = await res.json();
+
+  if (res.ok) {
+    try {
+      // Save to localStorage
+      localStorage.setItem(cacheKey, JSON.stringify({
+        timestamp: Date.now(),
+        data: data
+      }));
+    } catch (e) { console.warn('localStorage full, skipping cache save'); }
+  }
+
+  return data;
+}
 
 async function fetchAllVideos(forceRefresh = false) {
   const profile = getCurrentProfile();
@@ -955,7 +982,7 @@ async function fetchAllVideos(forceRefresh = false) {
     } else {
       // --- API Mode ---
       const validChannels = profile.channels.filter(c => c && c.id);
-      const promises = validChannels.map(channel => fetchChannelVideos(channel));
+      const promises = validChannels.map(channel => fetchChannelVideos(channel, null, forceRefresh));
       const results = await Promise.all(promises);
       checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
 
@@ -1087,7 +1114,7 @@ async function fetchChannelRSS(channel) {
   return [];
 }
 
-async function fetchChannelVideos(channel, startPageToken = null) {
+async function fetchChannelVideos(channel, startPageToken = null, forceRefresh = false) {
   // Optimization: If we already have uploadsId, skip first call
   let uploadsPlaylistId = channel.uploadsId;
 
@@ -1095,8 +1122,7 @@ async function fetchChannelVideos(channel, startPageToken = null) {
     // Fetch uploads ID cost: 1 unit
     const channelUrl = `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${channel.id}&key=${state.data.apiKey}`;
     try {
-      const chRes = await fetch(channelUrl);
-      const chData = await chRes.json();
+      const chData = await ytFetch(channelUrl, forceRefresh);
 
       if (!chData.items || chData.items.length === 0) return [];
       uploadsPlaylistId = chData.items[0].contentDetails.relatedPlaylists.uploads;
@@ -1130,8 +1156,7 @@ async function fetchChannelVideos(channel, startPageToken = null) {
         plUrl += `&pageToken=${nextPageToken}`;
       }
 
-      const plRes = await fetch(plUrl);
-      const plData = await plRes.json();
+      const plData = await ytFetch(plUrl, forceRefresh);
 
       if (!plData.items || plData.items.length === 0) break;
 
@@ -1155,8 +1180,7 @@ async function fetchChannelVideos(channel, startPageToken = null) {
         let dData = null; // Declare outside try so durationMap can access it below
 
         try {
-          const dRes = await fetch(detailsUrl);
-          dData = await dRes.json(); // Assign (not declare) so it's accessible after the block
+          dData = await ytFetch(detailsUrl, forceRefresh); // Assign (not declare) so it's accessible after the block
 
           if (dData.items) {
             dData.items.forEach(v => {
@@ -2295,8 +2319,6 @@ function openSettings() {
   if (apiKeyInput) apiKeyInput.value = state.data.apiKey;
 
   // Load Preferences
-  const shareStatsCb = document.getElementById('share-stats-checkbox');
-  if (shareStatsCb) shareStatsCb.checked = !!state.data.shareStats;
   const filterShortsCb = document.getElementById('filter-shorts-checkbox');
   if (filterShortsCb) filterShortsCb.checked = !!state.data.filterShorts;
 }
@@ -2479,33 +2501,7 @@ function setupEventListeners() {
   // Overlay Clicks
   settingsModal.onclick = (e) => { if (e.target === settingsModal) closeSettings(); };
   playerModal.onclick = (e) => { if (e.target === playerModal) closePlayer(); };
-  gateModal.onclick = (e) => { if (e.target === gateModal) gateModal.classList.add('hidden'); toggleBodyScroll(false); };
   document.getElementById('history-modal').onclick = (e) => { if (e.target.id === 'history-modal') closeHistoryPanel(); };
-
-  // Stats Toggle Listener
-  const shareStatsCb = document.getElementById('share-stats-checkbox');
-  if (shareStatsCb) {
-    shareStatsCb.onchange = (e) => {
-      state.data.shareStats = e.target.checked;
-      if (state.data.shareStats && !state.data.anonymousUserId) {
-        // Generate UUID
-        state.data.anonymousUserId = crypto.randomUUID ? crypto.randomUUID() : 'user_' + Date.now() + Math.random().toString(36).substr(2, 9);
-      }
-      saveLocalData();
-      if (state.data.shareStats) {
-        // Ensure ID exists
-        if (!state.data.anonymousUserId) {
-          state.data.anonymousUserId = crypto.randomUUID ? crypto.randomUUID() : 'user_' + Date.now();
-        }
-
-        // Critical: Save immediately so ID persists to Drive
-        // This prevents ID regeneration on next reload/login
-        saveLocalData();
-
-        checkAndUploadStats(true); // Attempt upload immediately if opted in
-      }
-    };
-  }
 
   // Filter Shorts Listener
   const filterShortsCb = document.getElementById('filter-shorts-checkbox');
@@ -2643,17 +2639,13 @@ function setupEventListeners() {
     if (e.key === 'Escape') {
       closePlayer();
       closeSettings();
-      gateModal.classList.add('hidden');
       const wizard = document.querySelector('.wizard-modal');
       if (wizard) wizard.remove();
       toggleBodyScroll(false);
     }
 
     if (e.key === 'Enter') {
-      if (!gateModal.classList.contains('hidden')) {
-        const btn = document.getElementById('gate-submit');
-        if (btn) btn.click();
-      } else if (e.target.id === 'api-key-input') {
+      if (e.target.id === 'api-key-input') {
         const btn = document.getElementById('save-api-key');
         if (btn) btn.click();
       }
@@ -3012,7 +3004,7 @@ async function showAddChannelModal() {
       const query = e.target.value.trim();
       clearTimeout(modalSearchDebounce);
       if (query.length < 2) { searchResults.classList.add('hidden'); return; }
-      modalSearchDebounce = setTimeout(() => searchChannelsInModal(query, searchResults, modal), 400);
+      modalSearchDebounce = setTimeout(() => searchChannelsInModal(query, searchResults, modal), 800);
     });
 
     // Hide dropdown when clicking outside search area
@@ -3046,10 +3038,9 @@ async function showAddChannelModal() {
       if (missing.length > 0 && state.data.apiKey) {
         try {
           const ids = missing.map(ch => ch.id).join(',');
-          const res = await fetch(
+          const data = await ytFetch(
             `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`
           );
-          const data = await res.json();
           if (data.items) {
             data.items.forEach(item => {
               const ch = channels.find(c => c.id === item.id);
@@ -3084,10 +3075,9 @@ async function searchChannelsInModal(query, resultsEl, modal) {
 
   try {
     // 1. Search for channels
-    const searchRes = await fetch(
+    const searchData = await ytFetch(
       `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${encodeURIComponent(query)}&maxResults=6&key=${state.data.apiKey}`
     );
-    const searchData = await searchRes.json();
     if (!modal.isConnected) return;
 
     const items = searchData.items || [];
@@ -3100,10 +3090,9 @@ async function searchChannelsInModal(query, resultsEl, modal) {
     const ids = items.map(i => i.snippet.channelId).join(',');
     let statsMap = {};
     try {
-      const statsRes = await fetch(
+      const statsData = await ytFetch(
         `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${ids}&key=${state.data.apiKey}`
       );
-      const statsData = await statsRes.json();
       (statsData.items || []).forEach(ch => {
         statsMap[ch.id] = parseInt(ch.statistics?.subscriberCount || '0', 10);
       });
@@ -3251,7 +3240,7 @@ function renderManageChannelList(listEl) {
     dragEl = null;
     saveDomOrder();
   };
-  listEl.addEventListener('pointerup',     endDrag);
+  listEl.addEventListener('pointerup', endDrag);
   listEl.addEventListener('pointercancel', endDrag);
 }
 

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git pull --rebase)",
+      "Bash(gh run list --limit 5)",
+      "Bash(git add logo.svg)"
+    ]
+  }
+}
