@@ -1597,6 +1597,12 @@ function getChannelInterestScores(profileId) {
   return scores;
 }
 
+/** Video ids this child has already watched (within the 14-day history window) */
+function getWatchedVideoIds(profileId) {
+  const history = JSON.parse(localStorage.getItem(STORAGE_KEY_WATCH_HISTORY + profileId) || '[]');
+  return new Set(history.map(h => h.videoId));
+}
+
 // --- Smart Interleaving Algorithm ---
 // Ensures channel diversity (max 2 consecutive from same channel) while
 // prioritising channels the child has recently shown interest in.
@@ -1604,21 +1610,45 @@ function getChannelInterestScores(profileId) {
 function applySmartInterleaving(videos) {
   const profile = getCurrentProfile();
   const interestScores = profile ? getChannelInterestScores(profile.id) : {};
+  const watchedIds = profile ? getWatchedVideoIds(profile.id) : new Set();
+  const now = Date.now();
 
-  // Group videos by channel, sort each group newest-first
+  // Per-video score: unwatched videos rank far above watched ones, and fresh
+  // uploads get a boost so a channel's new video surfaces first.
+  const videoScore = (v) => {
+    let s = 0;
+    const daysOld = (now - new Date(v.publishedAt).getTime()) / 86400000;
+    if (daysOld < 2) s += 30;
+    else if (daysOld < 7) s += 20;
+    else if (daysOld < 30) s += 10;
+    if (watchedIds.has(v.id)) s -= 100; // watched sinks to the back of its channel queue
+    return s;
+  };
+
+  // Group videos by channel; each queue ordered by score, then newest-first
   const byChannel = {};
   videos.forEach(v => {
     if (!byChannel[v.channelId]) byChannel[v.channelId] = [];
     byChannel[v.channelId].push(v);
   });
   for (const id in byChannel) {
-    byChannel[id].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+    byChannel[id].sort((a, b) =>
+      videoScore(b) - videoScore(a) || new Date(b.publishedAt) - new Date(a.publishedAt)
+    );
   }
 
-  // Base score 1 ensures every channel gets a fair chance even with no watch history
+  // Channel weights: interest counts double (recently-watched channels appear
+  // noticeably more), plus a bonus when the channel has a fresh unwatched
+  // upload (<48h) waiting at the head of its queue. Base 1 keeps every
+  // channel in rotation even with no watch history.
   const effectiveScores = {};
   for (const id in byChannel) {
-    effectiveScores[id] = 1 + (interestScores[id] || 0);
+    effectiveScores[id] = 1 + 2 * (interestScores[id] || 0);
+    const head = byChannel[id][0];
+    if (head && !watchedIds.has(head.id) &&
+      (now - new Date(head.publishedAt).getTime()) < 48 * 3600 * 1000) {
+      effectiveScores[id] += 4;
+    }
   }
 
   const result = [];
@@ -2669,6 +2699,14 @@ function showPlaylistPanel() {
         <button id="playlist-play-all" class="primary-btn" style="flex:1;">▶ ${t('playlist_play_all')}</button>
         <button id="playlist-clear" class="secondary-btn">${t('playlist_clear')}</button>
       </div>
+      <button id="playlist-import-btn" class="secondary-btn" style="width:100%; margin-bottom:12px;">
+        📥 ${t('playlist_import')}
+      </button>
+      <div id="playlist-import-area" style="display:none;">
+        <p id="import-status" class="small-text" style="margin:4px 0 8px;"></p>
+        <div id="import-channel-chips" class="import-channel-chips"></div>
+        <div id="import-playlists" class="import-playlists"></div>
+      </div>
       <ul id="playlist-list" class="playlist-list"></ul>
     </div>
   `;
@@ -2687,7 +2725,133 @@ function showPlaylistPanel() {
     renderVideos(); // refresh the "+" buttons on video cards
   };
 
+  // Import a channel's own YouTube playlist (Pro Mode / API key required)
+  const importArea = modal.querySelector('#playlist-import-area');
+  modal.querySelector('#playlist-import-btn').onclick = () => {
+    const showing = importArea.style.display !== 'none';
+    importArea.style.display = showing ? 'none' : 'block';
+    if (showing) return;
+    if (!state.data.apiKey) {
+      modal.querySelector('#import-status').textContent = t('playlist_import_need_api');
+      return;
+    }
+    renderImportChannelChips(modal);
+  };
+
   renderPlaylistList();
+}
+
+// --- Import from a channel's official YouTube playlists ---
+
+function renderImportChannelChips(modal) {
+  const chipsEl = modal.querySelector('#import-channel-chips');
+  const statusEl = modal.querySelector('#import-status');
+  const listEl = modal.querySelector('#import-playlists');
+  statusEl.textContent = t('playlist_import_pick_channel');
+  chipsEl.innerHTML = '';
+  listEl.innerHTML = '';
+
+  getCurrentProfile().channels.forEach(ch => {
+    const chip = document.createElement('button');
+    chip.className = 'import-channel-chip';
+    chip.innerHTML = `
+      <img src="${esc(ch.thumbnail || avatarFallbackUrl(ch.name, 64))}" alt=""
+        onerror="this.onerror=null;this.src='${avatarFallbackUrl(ch.name, 64)}'" />
+      <span>${esc(ch.name)}</span>
+    `;
+    chip.onclick = () => loadChannelPlaylists(modal, ch, chip);
+    chipsEl.appendChild(chip);
+  });
+}
+
+async function loadChannelPlaylists(modal, channel, chip) {
+  modal.querySelectorAll('.import-channel-chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  const listEl = modal.querySelector('#import-playlists');
+  listEl.innerHTML = `<p class="small-text" style="color:#99a3b8;">${t('playlist_import_loading')}</p>`;
+
+  try {
+    // Cost: 1 unit (cached 24h by ytFetch)
+    const data = await ytFetch(
+      `https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&channelId=${channel.id}&maxResults=25&key=${state.data.apiKey}`
+    );
+    if (!modal.isConnected) return;
+
+    const playlists = (data.items || []).map(p => ({
+      id: p.id,
+      title: p.snippet?.title || '',
+      thumbnail: p.snippet?.thumbnails?.medium?.url || p.snippet?.thumbnails?.default?.url || '',
+      count: p.contentDetails?.itemCount || 0
+    })).filter(p => p.count > 0);
+
+    if (playlists.length === 0) {
+      listEl.innerHTML = `<p class="small-text" style="color:#99a3b8;">${t('playlist_import_none')}</p>`;
+      return;
+    }
+
+    listEl.innerHTML = '';
+    playlists.forEach(pl => {
+      const row = document.createElement('div');
+      row.className = 'import-playlist-item';
+      row.innerHTML = `
+        <img class="playlist-thumb" src="${esc(pl.thumbnail)}" alt="" loading="lazy" />
+        <div class="playlist-info">
+          <div class="playlist-title">${esc(pl.title)}</div>
+          <div class="playlist-channel">${t('video_count', { count: pl.count })}</div>
+        </div>
+        <span class="import-add-icon">＋</span>
+      `;
+      row.onclick = () => importYtPlaylist(modal, pl);
+      listEl.appendChild(row);
+    });
+  } catch (e) {
+    console.warn('Failed to load channel playlists', e);
+    if (modal.isConnected) {
+      listEl.innerHTML = `<p class="small-text" style="color:#e55;">${t('playlist_import_error')}</p>`;
+    }
+  }
+}
+
+async function importYtPlaylist(modal, pl) {
+  if (!confirm(t('playlist_import_confirm', { title: pl.title, n: Math.min(pl.count, 50) }))) return;
+
+  try {
+    // Cost: 1 unit (cached 24h)
+    const data = await ytFetch(
+      `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${pl.id}&maxResults=50&key=${state.data.apiKey}`
+    );
+    const videos = (data.items || [])
+      .filter(i => {
+        const title = i.snippet?.title;
+        return i.snippet?.resourceId?.videoId &&
+          title && title !== 'Private video' && title !== 'Deleted video';
+      })
+      .map(i => ({
+        id: i.snippet.resourceId.videoId,
+        title: i.snippet.title,
+        thumbnail: i.snippet.thumbnails?.medium?.url
+          || `https://i.ytimg.com/vi/${i.snippet.resourceId.videoId}/mqdefault.jpg`,
+        channelId: i.snippet.videoOwnerChannelId || i.snippet.channelId || '',
+        channelTitle: i.snippet.videoOwnerChannelTitle || i.snippet.channelTitle || ''
+      }));
+
+    const profile = getCurrentProfile();
+    const current = getPlaylist(profile.id);
+    const existing = new Set(current.map(v => v.id));
+    const fresh = videos.filter(v => !existing.has(v.id));
+    savePlaylist(profile.id, [...current, ...fresh]);
+
+    renderPlaylistList();
+    renderVideos(); // refresh "+" buttons on cards
+    if (modal.isConnected) {
+      modal.querySelector('#import-status').textContent = t('playlist_import_done', { n: fresh.length });
+    }
+  } catch (e) {
+    console.warn('Playlist import failed', e);
+    if (modal.isConnected) {
+      modal.querySelector('#import-status').textContent = t('playlist_import_error');
+    }
+  }
 }
 
 function renderPlaylistList() {

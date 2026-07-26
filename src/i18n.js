@@ -197,6 +197,14 @@ export const translations = {
     playlist_add_tip: { en: "Add to playlist", zh: "加入播放清單" },
     playlist_remove_tip: { en: "Remove from playlist", zh: "從播放清單移除" },
     playlist_drag_tip: { en: "Drag to reorder", zh: "拖曳排序" },
+    playlist_import: { en: "Import a channel's playlist", zh: "從頻道匯入官方播放清單" },
+    playlist_import_pick_channel: { en: "Pick a channel:", zh: "選擇頻道：" },
+    playlist_import_loading: { en: "Loading playlists…", zh: "載入清單中…" },
+    playlist_import_none: { en: "This channel has no public playlists.", zh: "這個頻道沒有公開的播放清單。" },
+    playlist_import_confirm: { en: "Add up to {n} videos from “{title}” to the playlist?", zh: "把「{title}」的影片（最多 {n} 部）加入播放清單嗎？" },
+    playlist_import_done: { en: "✅ Added {n} videos", zh: "✅ 已加入 {n} 部影片" },
+    playlist_import_error: { en: "Failed to load — try again later.", zh: "載入失敗，請稍後再試。" },
+    playlist_import_need_api: { en: "Reading channel playlists requires Pro Mode (API Key) — set it up in Settings ⚙️.", zh: "讀取頻道播放清單需要 Pro Mode（API 金鑰），請先到設定 ⚙️ 啟用。" },
 
     // Parent Lock
     parent_lock: { en: "Parent Lock 🔒", zh: "家長鎖 🔒" },
