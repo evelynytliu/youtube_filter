@@ -3698,3 +3698,36 @@ button:focus-visible {
   padding: 4px 8px;
   flex-shrink: 0;
 }
+
+/* ===== Playlist Modal Layout Fixes ===== */
+/* .modal-content has padding: 0 — this body wrapper provides the inner
+   padding & scrolling, matching how settings/history modals are built. */
+.playlist-body {
+  padding: 0 24px 24px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.playlist-body .playlist-list {
+  max-height: none; /* the body itself scrolls */
+}
+
+/* Bigger, easier-to-tap channel chips */
+.import-channel-chip {
+  font-size: 0.9rem;
+  padding: 8px 16px 8px 8px;
+  gap: 8px;
+  border-radius: 24px;
+}
+
+.import-channel-chip img {
+  width: 36px;
+  height: 36px;
+}
+
+@media (max-width: 480px) {
+  .playlist-body {
+    padding: 0 16px 16px;
+  }
+}

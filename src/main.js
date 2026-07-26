@@ -2694,20 +2694,22 @@ function showPlaylistPanel() {
       <div class="modal-header">
         <h2>📃 ${t('playlist')}</h2>
       </div>
-      <p class="small-text" style="margin-top:0;">${t('playlist_hint')}</p>
-      <div class="playlist-actions-row">
-        <button id="playlist-play-all" class="primary-btn" style="flex:1;">▶ ${t('playlist_play_all')}</button>
-        <button id="playlist-clear" class="secondary-btn">${t('playlist_clear')}</button>
+      <div class="playlist-body">
+        <p class="small-text" style="margin-top:0;">${t('playlist_hint')}</p>
+        <div class="playlist-actions-row">
+          <button id="playlist-play-all" class="primary-btn" style="flex:1;">▶ ${t('playlist_play_all')}</button>
+          <button id="playlist-clear" class="secondary-btn">${t('playlist_clear')}</button>
+        </div>
+        <button id="playlist-import-btn" class="secondary-btn" style="width:100%; margin-bottom:12px;">
+          📥 ${t('playlist_import')}
+        </button>
+        <div id="playlist-import-area" style="display:none;">
+          <p id="import-status" class="small-text" style="margin:4px 0 8px;"></p>
+          <div id="import-channel-chips" class="import-channel-chips"></div>
+          <div id="import-playlists" class="import-playlists"></div>
+        </div>
+        <ul id="playlist-list" class="playlist-list"></ul>
       </div>
-      <button id="playlist-import-btn" class="secondary-btn" style="width:100%; margin-bottom:12px;">
-        📥 ${t('playlist_import')}
-      </button>
-      <div id="playlist-import-area" style="display:none;">
-        <p id="import-status" class="small-text" style="margin:4px 0 8px;"></p>
-        <div id="import-channel-chips" class="import-channel-chips"></div>
-        <div id="import-playlists" class="import-playlists"></div>
-      </div>
-      <ul id="playlist-list" class="playlist-list"></ul>
     </div>
   `;
   document.body.appendChild(modal);
