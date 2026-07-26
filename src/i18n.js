@@ -140,5 +140,91 @@ export const translations = {
     tab_popular: { en: "Top Picks", zh: "人氣榜" },
     tab_smart: { en: "For {name}", zh: "為 {name} 推薦" },
     tab_manage: { en: "My Channels", zh: "已加入" },
-    manage_empty: { en: "No channels added yet.", zh: "還沒有加入頻道。" }
+    manage_empty: { en: "No channels added yet.", zh: "還沒有加入頻道。" },
+
+    // Loading & status
+    loading_progress: { en: "Loading channels... {done}/{total}", zh: "頻道載入中… {done}/{total}" },
+    videos_loaded_free: { en: "✅ {count} videos loaded (Free Mode)", zh: "✅ 已載入 {count} 部影片（免費模式）" },
+
+    // Danger Zone
+    danger_zone: { en: "Danger Zone ⚠️", zh: "危險區域 ⚠️" },
+    reset_app: { en: "Reset All Data & Start Over", zh: "重設所有資料並重新開始" },
+    reset_app_note: { en: "This will delete all profiles and settings from this device. Cloud backup remains safe.", zh: "這將刪除此裝置上的所有個人檔案與設定。雲端備份不受影響。" },
+    reset_confirm_1: { en: "⚠️ WARNING: This will delete ALL data on this device.\n\nAre you sure you want to reset everything?", zh: "⚠️ 警告：這將刪除此裝置上的所有資料。\n\n確定要重設所有內容嗎？" },
+    reset_confirm_2: { en: "This action cannot be undone.\n(Note: Your cloud backup will NOT be deleted.)\n\nProceed with reset?", zh: "此操作無法復原。\n（注意：您的雲端備份不會被刪除。）\n\n確定要繼續重設嗎？" },
+
+    // Autoplay next
+    autoplay_next: { en: "Auto-play next video", zh: "自動連續播放" },
+    autoplay_next_desc: { en: "When a video ends, automatically play another video from your approved channels after 10 seconds.", zh: "影片播完後 10 秒，自動播放下一部（同樣來自您核准的頻道清單）。" },
+    autoplay_up_next: { en: "Up next:", zh: "即將播放：" },
+    autoplay_countdown: { en: "Playing in {n} seconds…", zh: "{n} 秒後播放…" },
+    autoplay_cancel: { en: "Stop autoplay", zh: "取消自動播放" },
+
+    // Parent audit log
+    audit_log: { en: "Settings Change Log 👀", zh: "設定變更紀錄 👀" },
+    audit_desc: { en: "Recent changes made on this device — so parents always know what was changed.", zh: "此裝置上最近的設定變更，家長隨時掌握有沒有人動過設定。" },
+    audit_empty: { en: "No changes recorded yet.", zh: "目前還沒有變更紀錄。" },
+    state_on: { en: "ON", zh: "開啟" },
+    state_off: { en: "OFF", zh: "關閉" },
+    audit_profile_added: { en: "Added child “{name}”", zh: "新增孩子「{name}」" },
+    audit_profile_deleted: { en: "Deleted child “{name}”", zh: "刪除孩子「{name}」" },
+    audit_profile_renamed: { en: "Renamed “{from}” to “{to}”", zh: "將「{from}」改名為「{to}」" },
+    audit_limit_changed: { en: "Changed {name}'s daily limit to {limit}", zh: "將 {name} 的每日限制改為 {limit}" },
+    audit_filter_shorts: { en: "Shorts filter: {state}", zh: "Shorts 過濾：{state}" },
+    audit_autoplay: { en: "Auto-play next: {state}", zh: "自動連續播放：{state}" },
+    audit_share_stats: { en: "Anonymous ranking participation: {state}", zh: "參與匿名排行：{state}" },
+    audit_mode_changed: { en: "Connection mode changed to {mode}", zh: "連線模式改為 {mode}" },
+    audit_channel_added: { en: "Added channel “{channel}” for {profile}", zh: "為 {profile} 新增頻道「{channel}」" },
+    audit_channel_removed: { en: "Removed channel “{channel}” from {profile}", zh: "從 {profile} 移除頻道「{channel}」" },
+    audit_history_cleared: { en: "Cleared {name}'s watch history", zh: "清除 {name} 的觀看紀錄" },
+
+    // Email login
+    email_login_placeholder: { en: "you@example.com", zh: "您的 Email（免密碼登入）" },
+    email_login_btn: { en: "Send Login Link", zh: "寄送登入連結" },
+    email_login_sent: { en: "📧 Login link sent! Check your inbox.", zh: "📧 登入連結已寄出，請查看信箱！" },
+    email_login_invalid: { en: "Please enter a valid email address.", zh: "請輸入有效的 Email 地址。" },
+
+    // Privacy
+    privacy_policy: { en: "Privacy Policy", zh: "隱私權政策" },
+
+    // Playlist
+    playlist: { en: "Playlist", zh: "播放清單" },
+    playlist_hint: { en: "Pre-pick videos here — press “Play All” and they play in order.", zh: "先把影片加入清單，按「播放全部」就會照順序自動連播。" },
+    playlist_empty: { en: "Playlist is empty. Tap the “+” on any video card to add it.", zh: "清單是空的。在影片卡片右上角按「＋」即可加入。" },
+    playlist_play_all: { en: "Play All", zh: "播放全部" },
+    playlist_clear: { en: "Clear", zh: "清空清單" },
+    playlist_clear_confirm: { en: "Clear the entire playlist?", zh: "確定要清空整個播放清單嗎？" },
+    playlist_add_tip: { en: "Add to playlist", zh: "加入播放清單" },
+    playlist_remove_tip: { en: "Remove from playlist", zh: "從播放清單移除" },
+    playlist_drag_tip: { en: "Drag to reorder", zh: "拖曳排序" },
+
+    // Parent Lock
+    parent_lock: { en: "Parent Lock 🔒", zh: "家長鎖 🔒" },
+    parent_lock_toggle: { en: "Lock switching between children", zh: "切換孩子時需要通過驗證" },
+    parent_lock_desc: { en: "Stops younger siblings from hopping onto another child's channel list. Settings sync to your other devices.", zh: "防止弟弟妹妹自己切換到別人的頻道清單。設定會同步到您的其他裝置。" },
+    lock_mode_quiz: { en: "🧮 Math quiz (Chinese numerals)", zh: "🧮 數學問答（國字）" },
+    lock_mode_quiz_desc: { en: "Older kids who can read and do arithmetic can pass — handy when they help switch profiles.", zh: "看得懂國字、會算數學的大孩子可以通過——需要哥哥姊姊幫忙切換時很方便。" },
+    lock_mode_pin: { en: "🔢 PIN code", zh: "🔢 PIN 碼" },
+    lock_mode_pin_desc: { en: "Only someone who knows the PIN can switch (strictest).", zh: "只有知道 PIN 的人能切換（最嚴格）。" },
+    quiz_title: { en: "Answer to switch 🧮", zh: "回答問題才能切換" },
+    quiz_wrong: { en: "Not quite — try this one!", zh: "答錯了，換一題再試試！" },
+    quiz_confirm: { en: "Confirm", zh: "確認" },
+    audit_lock_mode: { en: "Parent lock mode changed to {mode}", zh: "家長鎖方式改為 {mode}" },
+    change_pin: { en: "Change PIN", zh: "變更 PIN" },
+    pin_title: { en: "Parents Only 🔒", zh: "限家長使用 🔒" },
+    pin_subtitle: { en: "Enter the 4-digit PIN", zh: "請輸入 4 位數 PIN" },
+    pin_set_title: { en: "Set Parent PIN", zh: "設定家長 PIN" },
+    pin_set_subtitle: { en: "Choose a 4-digit PIN", zh: "請設定 4 位數 PIN" },
+    pin_confirm_subtitle: { en: "Enter it again to confirm", zh: "再輸入一次確認" },
+    pin_wrong: { en: "Wrong PIN, try again", zh: "PIN 錯誤，請再試一次" },
+    audit_parent_lock: { en: "Parent lock: {state}", zh: "家長鎖：{state}" },
+    audit_pin_changed: { en: "Parent PIN changed", zh: "變更家長 PIN" },
+
+    // Onboarding welcome step
+    welcome_intro: { en: "Your kids only watch YouTube channels you approve — no algorithm, no surprises.", zh: "孩子只看你核准的 YouTube 頻道——沒有演算法推薦、沒有奇怪影片。" },
+    feature_whitelist: { en: "Parents pick the channels; kids stay inside the list", zh: "家長挑頻道，孩子只能看清單內的影片" },
+    feature_timer: { en: "Daily time limits & watch history", zh: "每日觀看時間限制與觀看紀錄" },
+    feature_sync: { en: "Log in to sync across all your devices", zh: "登入後可跨裝置同步所有設定" },
+    wizard_start_new: { en: "Get Started (free, 1 minute)", zh: "開始設定（免註冊，1 分鐘）" },
+    step1_title: { en: "Create your child's profile", zh: "建立孩子的個人檔案" }
 };

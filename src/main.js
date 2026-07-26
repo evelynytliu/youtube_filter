@@ -17,6 +17,9 @@ const STORAGE_KEY_WATCH_HISTORY = 'safetube_watch_history_'; // Per-profile: + p
 const INTEREST_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // 14 days in ms
 const MAX_WATCH_HISTORY = 50;
 const STORAGE_KEY_WATCH_TIME = 'safetube_watch_time_'; // Per-profile per day: + profileId_YYYY-MM-DD
+const STORAGE_KEY_PLAYLIST = 'kiddolens_playlist_'; // Per-profile: + profileId
+const STORAGE_KEY_ACTIVE_CHANNEL = 'kiddolens_active_channel_'; // Per-profile: + profileId
+const STORAGE_KEY_SORT = 'kiddolens_sort';
 import { createClient } from '@supabase/supabase-js';
 import { getMockData } from './mockData.js';
 
@@ -30,6 +33,20 @@ const STORAGE_KEY_LANG = 'safetube_lang';
 
 // ...
 
+/** Renames per-profile localStorage keys when a profile id changes (UUID migration) */
+function migrateProfileStorageKeys(oldId, newId) {
+  const prefixes = [STORAGE_KEY_WATCH_HISTORY, STORAGE_KEY_WATCH_TIME, 'safetube_v2_', STORAGE_KEY_PLAYLIST, STORAGE_KEY_ACTIVE_CHANNEL];
+  Object.keys(localStorage).forEach(key => {
+    for (const prefix of prefixes) {
+      if (key.startsWith(prefix + oldId)) {
+        const newKey = prefix + newId + key.slice((prefix + oldId).length);
+        localStorage.setItem(newKey, localStorage.getItem(key));
+        localStorage.removeItem(key);
+      }
+    }
+  });
+}
+
 function ensureUUIDs() {
   let changed = false;
   state.data.profiles.forEach(p => {
@@ -38,6 +55,8 @@ function ensureUUIDs() {
     if (!isUUID) {
       const oldId = p.id;
       p.id = crypto.randomUUID();
+      // Carry watch history, watch time, caches & playlist over to the new id
+      migrateProfileStorageKeys(oldId, p.id);
       changed = true;
       if (state.data.currentProfileId === oldId) {
         state.data.currentProfileId = p.id;
@@ -60,6 +79,10 @@ async function saveToSupabase() {
       youtube_api_key: state.data.apiKey,
       filter_shorts: state.data.filterShorts,
       share_stats: state.data.shareStats,
+      autoplay_next: !!state.data.autoPlayNext,
+      parent_lock_enabled: !!state.data.parentLock?.enabled,
+      parent_lock_mode: state.data.parentLock?.mode || 'pin',
+      parent_pin_hash: state.data.parentLock?.pinHash || null,
       updated_at: state.data.lastUpdated   // match local timestamp to avoid false conflicts
     });
     if (errSettings) throw errSettings;
@@ -146,6 +169,44 @@ async function saveToSupabase() {
       if (errChan) throw errChan;
     }
 
+    // 4. Sync playlists (per profile): delete removed items, upsert the rest
+    if (localProfileIds.length > 0) {
+      const { data: remoteItems } = await supabase
+        .from('kiddolens_playlist_items').select('id, profile_id, video_id');
+
+      const localKeys = new Set();
+      const itemsToUpsert = [];
+      state.data.profiles.forEach(p => {
+        getPlaylist(p.id).forEach((v, idx) => {
+          localKeys.add(`${p.id}_${v.id}`);
+          itemsToUpsert.push({
+            profile_id: p.id,
+            video_id: v.id,
+            title: v.title || '',
+            thumbnail_url: v.thumbnail || '',
+            channel_id: v.channelId || '',
+            channel_title: v.channelTitle || '',
+            duration: v.duration ?? null,
+            sort_order: idx
+          });
+        });
+      });
+
+      const itemsToDelete = (remoteItems || [])
+        .filter(r => localProfileIds.includes(r.profile_id))
+        .filter(r => !localKeys.has(`${r.profile_id}_${r.video_id}`))
+        .map(r => r.id);
+      if (itemsToDelete.length > 0) {
+        await supabase.from('kiddolens_playlist_items').delete().in('id', itemsToDelete);
+      }
+      if (itemsToUpsert.length > 0) {
+        const { error: errPl } = await supabase
+          .from('kiddolens_playlist_items')
+          .upsert(itemsToUpsert, { onConflict: 'profile_id, video_id' });
+        if (errPl) throw errPl;
+      }
+    }
+
     console.log('Saved to Supabase.');
     state.lastSyncedAt = new Date().toISOString();
     updateLastSyncedUI();
@@ -158,14 +219,17 @@ async function saveToSupabase() {
 async function downloadFromSupabase() {
   if (!state.user) return null;
   try {
-    const { data: settings } = await supabase.from('kiddolens_user_settings').select('*').single();
-    const { data: profiles } = await supabase.from('kiddolens_profiles').select('*');
-
-    // Query 1: get user's channel relationships (which profile has which channel, in what order)
-    const { data: profileChannels } = await supabase
-      .from('kiddolens_channels')
-      .select('profile_id, youtube_channel_id, sort_order')
-      .order('sort_order', { ascending: true });
+    // Run independent queries in parallel — halves restore/sync latency
+    const [{ data: settings }, { data: profiles }, { data: profileChannels }, { data: playlistItems }] = await Promise.all([
+      supabase.from('kiddolens_user_settings').select('*').single(),
+      supabase.from('kiddolens_profiles').select('*').order('created_at', { ascending: true }),
+      supabase.from('kiddolens_channels')
+        .select('profile_id, youtube_channel_id, sort_order')
+        .order('sort_order', { ascending: true }),
+      supabase.from('kiddolens_playlist_items')
+        .select('*')
+        .order('sort_order', { ascending: true })
+    ]);
 
     // Query 2: get metadata for those specific channels (name, thumbnail)
     const channelInfoMap = {};
@@ -185,6 +249,12 @@ async function downloadFromSupabase() {
       apiKey: settings?.youtube_api_key || '',
       filterShorts: settings?.filter_shorts ?? true,
       shareStats: settings?.share_stats ?? true,
+      autoPlayNext: settings?.autoplay_next ?? false,
+      parentLock: {
+        enabled: settings?.parent_lock_enabled ?? false,
+        mode: settings?.parent_lock_mode || 'pin',
+        pinHash: settings?.parent_pin_hash || null
+      },
       profiles: (profiles || []).map(p => ({
         id: p.id,
         name: p.name,
@@ -203,6 +273,20 @@ async function downloadFromSupabase() {
     if (configData.profiles.length > 0) {
       configData.currentProfileId = configData.profiles[0].id; // Assign a valid active profile
     }
+
+    // Per-profile playlists (applied to localStorage by applyCloudData)
+    configData._playlists = {};
+    (playlistItems || []).forEach(item => {
+      if (!configData._playlists[item.profile_id]) configData._playlists[item.profile_id] = [];
+      configData._playlists[item.profile_id].push({
+        id: item.video_id,
+        title: item.title,
+        thumbnail: item.thumbnail_url,
+        channelId: item.channel_id,
+        channelTitle: item.channel_title,
+        duration: item.duration ?? undefined
+      });
+    });
 
     return configData;
   } catch (e) {
@@ -256,19 +340,33 @@ function updateLastSyncedUI() {
  */
 function applyCloudData(driveConfig) {
   state.isApplyingCloudData = true;
+  // Preserve device-local anonymous id (not part of the cloud payload)
+  driveConfig.anonymousUserId = driveConfig.anonymousUserId || state.data.anonymousUserId;
+  // Keep the currently active child selected if it still exists in the cloud
+  // data — restoring must never silently jump back to the first profile.
+  if (driveConfig.profiles?.some(p => p.id === state.data.currentProfileId)) {
+    driveConfig.currentProfileId = state.data.currentProfileId;
+  }
+
+  // Apply per-profile playlists from the cloud (cloud wins on restore)
+  if (driveConfig._playlists) {
+    (driveConfig.profiles || []).forEach(p => {
+      const list = driveConfig._playlists[p.id] || [];
+      try { localStorage.setItem(STORAGE_KEY_PLAYLIST + p.id, JSON.stringify(list)); } catch (e) { /* full */ }
+    });
+    delete driveConfig._playlists;
+  }
+
   state.data = driveConfig;
   saveLocalData(); // persists to localStorage only (flag blocks cloud upload)
   state.isApplyingCloudData = false;
   updateProfileUI();
+  updatePlaylistBadge();
   renderChannelNav();    // refresh channel nav bar with cloud channels
-  renderChannelList();   // null-guarded; no-op if element removed
   fetchAllVideos(true);  // always refresh videos regardless of API key
   setTimeout(fetchMissingChannelIcons, 1000);
 }
 
-
-// Old implementations removed. Using the new ones at the top.
-const GOOGLE_CLIENT_ID = '959694478718-pksctjg2pbmtd1fnvp9geha2imqbi72j.apps.googleusercontent.com';
 
 // Avatars
 const AVATARS = ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🦄', '🦖', '🐙', '🦋', '🚀', '🎈', '⭐', '⚽', '🎮', '🎨'];
@@ -287,35 +385,10 @@ const DEFAULT_DATA = {
   apiKey: '',
   shareStats: true, // Default ON - help community discover safe channels
   anonymousUserId: null, // Generated upon opt-in
-  filterShorts: true // Default ON
+  filterShorts: true, // Default ON
+  autoPlayNext: false, // Default OFF - parent opt-in for continuous play
+  parentLock: { enabled: false, mode: 'quiz', pinHash: null } // gate for switching child profiles ('quiz' | 'pin')
 };
-
-// ...
-
-// Mock Data for Demo Mode
-const MOCK_VIDEOS = [
-  {
-    id: 'WRVsOCh907o',
-    title: 'Baby Shark Dance | #babyshark Most Viewed Video | Animal Songs | PINKFONG Songs for Children',
-    thumbnail: 'https://img.youtube.com/vi/WRVsOCh907o/maxresdefault.jpg',
-    channelTitle: 'Pinkfong Baby Shark - Kids\' Songs & Stories',
-    publishedAt: new Date().toISOString()
-  },
-  {
-    id: 'yCjJyiqpAuU',
-    title: 'Phonics Song with TWO Words - A For Apple - ABC Alphabet Songs with Sounds for Children',
-    thumbnail: 'https://img.youtube.com/vi/yCjJyiqpAuU/maxresdefault.jpg',
-    channelTitle: 'ChuChu TV',
-    publishedAt: new Date().toISOString()
-  },
-  {
-    id: '_6HzoUcx3eo',
-    title: 'Twinkle Twinkle Little Star',
-    thumbnail: 'https://img.youtube.com/vi/_6HzoUcx3eo/maxresdefault.jpg',
-    channelTitle: 'Super Simple Songs',
-    publishedAt: new Date().toISOString()
-  }
-];
 
 let state = {
   data: DEFAULT_DATA,
@@ -326,8 +399,38 @@ let state = {
   currentSort: 'shuffle',    // Default to shuffle
   isApplyingCloudData: false, // Prevents save-loop when applying downloaded cloud data
   driveSaveTimer: null,       // Debounce timer for background cloud saves
-  lastSyncedAt: null          // Timestamp of last successful cloud sync
+  lastSyncedAt: null,         // Timestamp of last successful cloud sync
+  initialSyncDone: false,     // Cloud sync runs once per page load, not on every token refresh
+  playQueue: null,            // Active playlist queue (array of videos) while playing
+  queueIndex: 0               // Current position in playQueue
 };
+
+// --- Shared Helpers ---
+
+/** Escape untrusted text (video titles, channel/profile names) before inserting into innerHTML */
+function esc(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** ui-avatars fallback URL, safe to embed inside an inline onerror handler (no quotes survive) */
+function avatarFallbackUrl(name, size = 128) {
+  return `https://ui-avatars.com/api/?name=${encodeURIComponent(name || '?').replace(/'/g, '%27')}&background=random&size=${size}`;
+}
+
+/**
+ * Title-based Shorts detection (used in Lite Mode and as cache fallback).
+ * Matches #shorts / [shorts] / (shorts) / standalone "shorts", but NOT the
+ * ordinary English word "short" (e.g. "A Short Story") to avoid over-filtering.
+ */
+const SHORTS_TITLE_REGEX = /#shorts?\b|\[shorts?\]|\(shorts?\)|\bshorts\b/i;
+function isShortsTitle(title) {
+  return SHORTS_TITLE_REGEX.test(title || '');
+}
 
 // --- i18n Logic ---
 function t(key, variables = {}) {
@@ -356,11 +459,19 @@ function updateLanguageUI() {
   document.getElementById('refresh-btn').title = t('refresh_videos');
   document.getElementById('history-btn').title = t('watch_history');
   document.getElementById('settings-btn').title = t('parent_settings');
+  const playlistBtnEl = document.getElementById('playlist-btn');
+  if (playlistBtnEl) playlistBtnEl.title = t('playlist');
 
-  // Toolbar
+  // Toolbar — reflect the active channel filter (also on restored sessions)
   const label = document.getElementById('active-channel-display');
-  if (label && !state.activeChannelId) {
-    label.textContent = t('all_videos');
+  if (label) {
+    if (state.activeChannelId) {
+      const activeCh = getCurrentProfile().channels.find(c => c.id === state.activeChannelId);
+      label.textContent = activeCh ? activeCh.name : t('all_videos');
+    } else {
+      label.textContent = t('all_videos');
+    }
+    label.classList.add('show');
   }
   // videoCount.textContent is updated in renderVideos
 
@@ -368,22 +479,37 @@ function updateLanguageUI() {
   const settingsTitleText = document.getElementById('settings-title-text');
   if (settingsTitleText) settingsTitleText.textContent = t('parent_settings');
 
-  // Google Sync
-  const googleSyncTitle = document.getElementById('google-sync-title');
-  if (googleSyncTitle) googleSyncTitle.textContent = t('google_sync');
-
+  // Cloud Sync
+  const syncTitle = document.getElementById('sync-title');
+  if (syncTitle) syncTitle.textContent = t('google_sync');
   document.querySelector('.settings-section .small-text').textContent = t('sync_desc');
-  const loginBtn = document.getElementById('google-login-btn');
-  if (loginBtn && !state.accessToken) loginBtn.textContent = t('login_google');
-  else if (loginBtn && state.accessToken) loginBtn.textContent = t('sync_now');
 
   // Who is watching
-  const sections = document.querySelectorAll('.settings-section');
-  sections[1].querySelector('h3').textContent = t('who_is_watching');
+  const whoTitle = document.getElementById('who-title');
+  if (whoTitle) whoTitle.textContent = t('who_is_watching');
   document.getElementById('new-profile-name').placeholder = t('add_child_placeholder');
 
+  // Parent Lock
+  const lockTitle = document.getElementById('parent-lock-title');
+  if (lockTitle) lockTitle.textContent = t('parent_lock');
+  const lockLabel = document.getElementById('parent-lock-label-text');
+  if (lockLabel) lockLabel.textContent = t('parent_lock_toggle');
+  const lockDesc = document.getElementById('parent-lock-desc');
+  if (lockDesc) lockDesc.textContent = t('parent_lock_desc');
+  const changePinEl = document.getElementById('change-pin-btn');
+  if (changePinEl) changePinEl.textContent = t('change_pin');
+  const quizLabel = document.getElementById('lock-mode-quiz-label');
+  if (quizLabel) quizLabel.textContent = t('lock_mode_quiz');
+  const quizDesc = document.getElementById('lock-mode-quiz-desc');
+  if (quizDesc) quizDesc.textContent = t('lock_mode_quiz_desc');
+  const pinLabel = document.getElementById('lock-mode-pin-label');
+  if (pinLabel) pinLabel.textContent = t('lock_mode_pin');
+  const pinDesc = document.getElementById('lock-mode-pin-desc');
+  if (pinDesc) pinDesc.textContent = t('lock_mode_pin_desc');
+
   // Connection Mode
-  sections[2].querySelector('h3').textContent = t('connection_mode');
+  const connTitle = document.getElementById('connection-title');
+  if (connTitle) connTitle.textContent = t('connection_mode');
   document.getElementById('mode-lite').innerHTML = `<span class="mode-icon">🎈</span> ${t('lite_mode')}`;
   document.getElementById('mode-pro').innerHTML = `<span class="mode-icon">🚀</span> ${t('pro_mode')}`;
 
@@ -413,12 +539,51 @@ function updateLanguageUI() {
   document.getElementById('security-note-text').textContent = t('security_note_text');
 
   // Content Preferences
-  sections[3].querySelector('h3').textContent = t('content_preferences');
-  sections[3].querySelector('span').textContent = t('filter_shorts');
-  sections[3].querySelector('.small-text').innerHTML = `
+  const contentTitle = document.getElementById('content-title');
+  if (contentTitle) contentTitle.textContent = t('content_preferences');
+  const fsLabel = document.getElementById('filter-shorts-label');
+  if (fsLabel) fsLabel.textContent = t('filter_shorts');
+  const fsDesc = document.getElementById('filter-shorts-desc');
+  if (fsDesc) fsDesc.innerHTML = `
     <strong>${t('lite_mode')}:</strong> ${t('lite_filter_desc')}<br>
     <strong>${t('pro_mode')}:</strong> ${t('pro_filter_desc')}
   `;
+
+  // Autoplay & anonymous-stats toggles
+  const apLabel = document.getElementById('autoplay-label-text');
+  if (apLabel) apLabel.textContent = t('autoplay_next');
+  const apDesc = document.getElementById('autoplay-desc');
+  if (apDesc) apDesc.textContent = t('autoplay_next_desc');
+  const ssLabel = document.getElementById('share-stats-label-text');
+  if (ssLabel) ssLabel.textContent = t('participate_ranking');
+  const ssDesc = document.getElementById('share-stats-desc');
+  if (ssDesc) ssDesc.textContent = t('ranking_desc');
+
+  // Parent Audit Log
+  const auditTitle = document.getElementById('audit-title');
+  if (auditTitle) auditTitle.textContent = t('audit_log');
+  const auditDescEl = document.getElementById('audit-desc');
+  if (auditDescEl) auditDescEl.textContent = t('audit_desc');
+
+  // Email login
+  const emailInput = document.getElementById('email-login-input');
+  if (emailInput) emailInput.placeholder = t('email_login_placeholder');
+  const emailBtn = document.getElementById('email-login-btn');
+  if (emailBtn) emailBtn.textContent = t('email_login_btn');
+
+  // Footer privacy link
+  const privacyLink = document.getElementById('privacy-link');
+  if (privacyLink) privacyLink.textContent = t('privacy_policy');
+
+  // Danger Zone (id-based — section order may change)
+  const dangerTitle = document.getElementById('danger-title');
+  if (dangerTitle) {
+    dangerTitle.textContent = t('danger_zone');
+    const resetBtn = document.getElementById('reset-app-btn');
+    if (resetBtn) resetBtn.textContent = t('reset_app');
+    const dzNote = dangerTitle.closest('.settings-section')?.querySelector('.small-text');
+    if (dzNote) dzNote.textContent = t('reset_app_note');
+  }
 
   // Footer
   const footerText = document.getElementById('footer-text');
@@ -426,7 +591,6 @@ function updateLanguageUI() {
 
   // Re-render dynamic content
   renderVideos();
-  renderChannelList();
   updateProfileUI();
 }
 
@@ -435,9 +599,7 @@ const videoContainer = document.getElementById('video-container');
 const settingsModal = document.getElementById('settings-modal');
 const playerModal = document.getElementById('player-modal');
 const apiKeyInput = document.getElementById('api-key-input');
-const channelList = document.getElementById('channel-list');
 const apiStatus = document.getElementById('api-status');
-const loginBtn = document.getElementById('google-login-btn');
 
 // Profile Elements
 const profileSelector = document.getElementById('profile-selector');
@@ -457,8 +619,12 @@ function setupSupabaseAuth() {
     state.user = session?.user || null;
     updateSyncUI();
 
-    // Automatically sync when user logs in
-    if (event === 'SIGNED_IN') {
+    // Sync once per page load when a session appears (fresh login OR restored
+    // session). Guarded so hourly token refreshes don't re-sync and re-render
+    // the grid while a child is watching.
+    if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && state.user && !state.initialSyncDone) {
+      state.initialSyncDone = true;
+
       // If a different user was previously logged in on this device, reload the page
       // so init() runs fresh for the new user (shows wizard if they have no data, or restores their backup).
       const prevUid = localStorage.getItem('kiddolens_uid');
@@ -518,6 +684,9 @@ function updateSyncUI() {
       logoutBtn.onclick = handleLogout;
     }
 
+    const emailRowIn = document.getElementById('email-login-row');
+    if (emailRowIn) emailRowIn.style.display = 'none';
+
     if (userInfoCard) {
       userInfoCard.classList.remove('hidden');
       userInfoCard.style.display = 'flex';
@@ -543,6 +712,9 @@ function updateSyncUI() {
       if (typeof startApp === 'function') startApp();
     }
 
+    // Already logged in — the login nudge is no longer relevant
+    document.getElementById('onboarding-tooltip')?.remove();
+
     updateLastSyncedUI();
 
   } else {
@@ -553,6 +725,9 @@ function updateSyncUI() {
     loginBtn.onclick = handleLogin;
 
     if (logoutBtn) logoutBtn.style.display = 'none';
+
+    const emailRow = document.getElementById('email-login-row');
+    if (emailRow) emailRow.style.display = 'flex';
 
     if (userInfoCard) {
       userInfoCard.classList.add('hidden');
@@ -653,16 +828,40 @@ function startApp() {
     setupSupabaseAuth();
   }
 
+  // Restore last-session state (sort mode & this child's channel filter)
+  const savedSort = localStorage.getItem(STORAGE_KEY_SORT);
+  if (savedSort === 'newest' || savedSort === 'shuffle' || savedSort === 'oldest') {
+    state.currentSort = savedSort;
+  }
+  if (state.activeChannelId == null) {
+    state.activeChannelId = restoreActiveChannel(getCurrentProfile().id);
+  }
+
   // Always run: UI updates & video fetch
   updateLanguageUI();
   updateProfileUI();
   updateSyncUI();
   updateTimeIndicator();
+  updatePlaylistBadge();
   fetchMissingChannelIcons();
   fetchAllVideos();
 }
 
+/** Removes expired 24h API-cache entries so localStorage never fills up over time */
+function purgeStaleApiCache() {
+  const now = Date.now();
+  Object.keys(localStorage).filter(k => k.startsWith('yt_api_cache_')).forEach(k => {
+    try {
+      const { timestamp } = JSON.parse(localStorage.getItem(k));
+      if (!timestamp || now - timestamp > 24 * 60 * 60 * 1000) localStorage.removeItem(k);
+    } catch (e) {
+      localStorage.removeItem(k); // unparsable → junk
+    }
+  });
+}
+
 async function init() {
+  purgeStaleApiCache();
   loadLocalData();
 
   // Check if first-time setup is needed
@@ -697,64 +896,45 @@ async function init() {
   // Normal Start
   startApp();
 
-  // Show Onboarding Tooltip (Login Nudge) for users who finished setup but aren't logged in
-  if (currentProfile && !state.user && !localStorage.getItem('onboarding_dismissed')) {
-    setTimeout(() => {
-      const tooltip = document.getElementById('onboarding-tooltip');
-      if (tooltip) {
-        const textEl = tooltip.querySelector('p');
-        if (textEl) textEl.innerHTML = t('onboarding_login_tooltip');
-        if (tooltip.classList.contains('hidden')) tooltip.classList.remove('hidden');
-        tooltip.classList.add('show');
-      }
-    }, 3000);
+  // Show Login Nudge for users who finished setup but aren't logged in
+  if (currentProfile && !state.user) {
+    setTimeout(showLoginNudge, 3000);
   }
 }
 
-function showOnboardingTooltip() {
-  const dismissed = localStorage.getItem('safetube_onboarding_dismissed');
-  if (dismissed) return;
+/**
+ * Login nudge: shown once to users who finished setup but aren't logged in,
+ * suggesting they back up their list with a Google login.
+ */
+function showLoginNudge() {
+  if (state.user) return;
+  if (localStorage.getItem('onboarding_dismissed')) return;
+  if (document.getElementById('onboarding-tooltip')) return;
 
-  // Check if this looks like a new/default setup
-  const profile = getCurrentProfile();
-  const isDefault = profile.name === 'Default Child' || (profile.channels.length <= 3 && !state.data.apiKey);
-  if (!isDefault) return;
-
-  // Create the tooltip element
   const tooltip = document.createElement('div');
   tooltip.id = 'onboarding-tooltip';
   tooltip.innerHTML = `
     <div class="onboarding-content">
-      <div class="onboarding-title">${t('onboarding_title')}</div>
-      <p class="onboarding-text">${t('onboarding_text')}</p>
+      <p class="onboarding-text">${t('onboarding_login_tooltip')}</p>
       <div class="onboarding-actions">
-        <button id="onboarding-go" class="onboarding-btn-primary">${t('onboarding_btn')}</button>
+        <button id="onboarding-go" class="onboarding-btn-primary">${t('login_google')}</button>
         <button id="onboarding-dismiss" class="onboarding-btn-dismiss">${t('onboarding_dismiss')}</button>
       </div>
     </div>
   `;
-
   document.body.appendChild(tooltip);
 
-  // Animate in
-  requestAnimationFrame(() => {
-    tooltip.classList.add('show');
-  });
+  requestAnimationFrame(() => tooltip.classList.add('show'));
 
-  document.getElementById('onboarding-go').onclick = () => {
-    dismissOnboarding(tooltip);
-    settingsModal.classList.remove('hidden');
-    renderChannelList();
-    updateProfileUI();
+  tooltip.querySelector('#onboarding-go').onclick = () => {
+    dismissLoginNudge(tooltip);
+    handleLogin();
   };
-
-  document.getElementById('onboarding-dismiss').onclick = () => {
-    dismissOnboarding(tooltip);
-  };
+  tooltip.querySelector('#onboarding-dismiss').onclick = () => dismissLoginNudge(tooltip);
 }
 
-function dismissOnboarding(tooltip) {
-  localStorage.setItem('safetube_onboarding_dismissed', '1');
+function dismissLoginNudge(tooltip) {
+  localStorage.setItem('onboarding_dismissed', '1');
   tooltip.classList.remove('show');
   setTimeout(() => tooltip.remove(), 400);
 }
@@ -763,7 +943,12 @@ function loadLocalData() {
   const rawData = localStorage.getItem(STORAGE_KEY_DATA);
 
   if (rawData) {
-    state.data = JSON.parse(rawData);
+    try {
+      state.data = JSON.parse(rawData);
+    } catch (e) {
+      console.error('Local data corrupted, resetting to defaults', e);
+      state.data = JSON.parse(JSON.stringify(DEFAULT_DATA));
+    }
   } else {
     // Migration: Check if old format exists
     const oldKey = localStorage.getItem('safetube_api_key');
@@ -781,6 +966,18 @@ function loadLocalData() {
 
   // Ensure strict structure
   if (!state.data.profiles) state.data = DEFAULT_DATA;
+
+  // Self-heal: earlier mock-mode sessions may have persisted fake uploads
+  // playlist ids, which make real API calls fail with 400. Strip them so
+  // they get re-derived from the real API on the next fetch.
+  let healed = false;
+  state.data.profiles.forEach(p => (p.channels || []).forEach(c => {
+    if (c.uploadsId && c.uploadsId.includes('mock')) {
+      delete c.uploadsId;
+      healed = true;
+    }
+  }));
+  if (healed) saveLocalData();
 }
 
 function saveLocalData() {
@@ -800,14 +997,15 @@ function getCurrentProfile() {
 // Old implementations removed. Using the new ones at the top.
 
 // --- Video Fetching ---
-const CORS_PROXY = 'https://api.allorigins.win/get?url=';
 const CACHE_DURATION = 1000 * 60 * 60; // 1 Hour
+// Mock mode (local dev only): all YouTube API calls return fake data to save quota
+const IS_MOCK = import.meta.env.VITE_USE_MOCK_YOUTUBE_API === 'true';
 
 // --- Optimized API Fetcher (Mock & Cache) ---
 // Cost-saving wrapper for all YouTube API calls
 async function ytFetch(url, forceNetwork = false) {
   // 1. Mock Mode (100% Free - local development only)
-  if (import.meta.env.VITE_USE_MOCK_YOUTUBE_API === 'true') {
+  if (IS_MOCK) {
     console.log('[Mock Mode] Simulating API call:', url.split('?')[0]);
     return await getMockData(url);
   }
@@ -865,26 +1063,30 @@ async function fetchAllVideos(forceRefresh = false) {
 
   if (!forceRefresh && cachedData) {
     try {
-      const { timestamp, videos } = JSON.parse(cachedData);
+      const { timestamp, videos, channelIds, nextPageTokens } = JSON.parse(cachedData);
       const age = Date.now() - timestamp;
-      if (age < CACHE_DURATION) {
+      // Invalidate cache when a channel was added after it was written,
+      // otherwise the new channel's videos would not appear for up to 1 hour.
+      const cachedChannelSet = new Set(channelIds || []);
+      const hasNewChannel = profile.channels.some(c => !cachedChannelSet.has(c.id));
+      if (age < CACHE_DURATION && !hasNewChannel) {
         const currentChannelIds = new Set(profile.channels.map(c => c.id));
         let validVideos = videos.filter(v => currentChannelIds.has(v.channelId));
 
         // Re-apply filter on cached videos
         if (state.data.filterShorts) {
-          const shortsRegex = /#shorts?|\[shorts?\]|\(shorts?\)|\bshorts?\b/i;
           validVideos = validVideos.filter(v => {
             if (v.duration && v.duration > 0) return v.duration > 90;
-            return !shortsRegex.test(v.title.toLowerCase());
+            return !isShortsTitle(v.title);
           });
         }
 
         if (validVideos.length > 0) {
           console.log('Using cached videos (filtered)');
           state.videos = validVideos;
+          // Restore pagination tokens so the "Load More" button survives reloads
+          state.channelNextPageTokens = nextPageTokens || {};
           state.activeChannelId = preservedChannelId;
-          state.currentSort = 'shuffle';
           renderChannelNav();
           updateSortUI();
           renderVideos();
@@ -942,13 +1144,12 @@ async function fetchAllVideos(forceRefresh = false) {
 
             // Progressive render
             state.activeChannelId = preservedChannelId;
-            state.currentSort = 'shuffle';
             renderChannelNav();
             updateSortUI();
             renderVideos();
           }
 
-          apiStatus.textContent = `Loading channels... ${loadedCount}/${totalChannels}`;
+          apiStatus.textContent = t('loading_progress', { done: loadedCount, total: totalChannels });
           apiStatus.style.color = '#FFA500';
           return videos;
         } catch (e) {
@@ -960,24 +1161,25 @@ async function fetchAllVideos(forceRefresh = false) {
 
       await Promise.all(promises);
 
-      // Final state
+      // Final state: all RSS proxies failed → show a friendly hint,
+      // and do NOT cache anything so the next attempt retries for real.
       if (checkVideos.length === 0) {
-        console.warn('RSS returned no videos, falling back to demo content');
-        checkVideos = MOCK_VIDEOS;
+        console.warn('RSS returned no videos');
+        state.videos = [];
 
         videoContainer.innerHTML = `<div style="text-align:center; padding: 2rem;">
             <p style="font-size: 1.2rem;">🎬</p>
-            <p style="font-weight: 600; margin: 10px 0;">${t('no_videos_yet') || 'Videos are loading...'}</p>
-            <p class="small-text" style="color: #888; max-width: 300px; margin: 0 auto;">${t('lite_mode_slow_hint') ||
-          'Free Mode uses public feeds which may be slow. For instant loading, add a YouTube API Key in Settings ⚙️'}</p>
+            <p style="font-weight: 600; margin: 10px 0;">${t('no_videos_yet')}</p>
+            <p class="small-text" style="color: #888; max-width: 300px; margin: 0 auto;">${t('lite_mode_slow_hint')}</p>
           </div>`;
 
-        apiStatus.textContent = t('status_demo_mode') || 'Demo Mode';
+        apiStatus.textContent = t('status_demo_mode');
         apiStatus.style.color = '#FFA500';
-      } else {
-        apiStatus.textContent = `✅ ${checkVideos.length} videos loaded (Free Mode)`;
-        apiStatus.style.color = '#4ecdc4';
+        return;
       }
+
+      apiStatus.textContent = t('videos_loaded_free', { count: checkVideos.length });
+      apiStatus.style.color = '#4ecdc4';
 
     } else {
       // --- API Mode ---
@@ -995,16 +1197,20 @@ async function fetchAllVideos(forceRefresh = false) {
     state.videos = checkVideos;
 
     // Save to Cache (must match the read key safetube_v2_*)
+    // channelIds lets the cache be invalidated when a new channel is added.
     const cacheKey2 = `safetube_v2_${profile.id}`;
-    localStorage.setItem(cacheKey2, JSON.stringify({
-      timestamp: Date.now(),
-      videos: state.videos
-    }));
+    try {
+      localStorage.setItem(cacheKey2, JSON.stringify({
+        timestamp: Date.now(),
+        videos: state.videos,
+        channelIds: profile.channels.map(c => c.id),
+        nextPageTokens: state.channelNextPageTokens
+      }));
+    } catch (e) { console.warn('localStorage full, skipping video cache save'); }
 
     if (!useLiteMode) saveLocalData();
 
     state.activeChannelId = preservedChannelId;
-    state.currentSort = 'shuffle';
 
     renderChannelNav();
     updateSortUI();
@@ -1013,20 +1219,19 @@ async function fetchAllVideos(forceRefresh = false) {
   } catch (error) {
     if (useLiteMode) {
       console.error('RSS Lite Mode Error:', error);
-      apiStatus.textContent = 'Error: Cannot fetch RSS feed.';
+      apiStatus.textContent = t('error_rss');
       apiStatus.style.color = '#ff6b6b';
       videoContainer.innerHTML = `<div style="text-align:center; padding: 2rem;">
-            <p>😕 Free Mode encountered an error.</p>
-            <p class="small-text" style="margin-top: 8px;">Try refreshing, or add a YouTube API Key in Settings for better reliability.</p>
+            <p>😕 ${t('error_rss')}</p>
+            <p class="small-text" style="margin-top: 8px;">${t('lite_mode_slow_hint')}</p>
         </div>`;
     } else {
       console.error('Error fetching videos:', error);
-      apiStatus.textContent = 'Error: ' + error.message;
+      apiStatus.textContent = t('error_api', { message: error.message });
       apiStatus.style.color = '#ff6b6b';
       videoContainer.innerHTML = `<div style="text-align:center; padding: 2rem;">
-            <p>😕 Something went wrong (API Mode).</p>
-            <p style="color:red; font-size: 0.8rem;">${error.message}</p>
-            <p>Check API Key or internet.</p>
+            <p>😕 ${t('error_api', { message: esc(error.message) })}</p>
+            <p class="small-text" style="margin-top: 8px;">${t('lite_mode_slow_hint')}</p>
         </div>`;
     }
   }
@@ -1037,12 +1242,17 @@ async function fetchChannelRSS(channel) {
   // Public YouTube RSS Feed URL
   const rssUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channel.id}`;
 
-  // CORS Proxies - ordered by reliability (corsproxy.io verified working)
+  // Our own Supabase Edge Function proxy first (fast, reliable, private),
+  // free third-party CORS proxies only as fallback.
   const proxyConfigs = [
+    {
+      url: `${supabaseUrl}/functions/v1/rss-proxy?channel_id=${channel.id}`,
+      type: 'text',
+      headers: { apikey: supabaseAnonKey, Authorization: `Bearer ${supabaseAnonKey}` }
+    },
     { url: `https://corsproxy.io/?url=${encodeURIComponent(rssUrl)}`, type: 'text' },
     { url: `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(rssUrl)}`, type: 'text' },
-    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`, type: 'json' },
-    { url: `https://thingproxy.freeboard.io/fetch/${rssUrl}`, type: 'text' }
+    { url: `https://api.allorigins.win/get?url=${encodeURIComponent(rssUrl)}`, type: 'json' }
   ];
 
   for (const proxy of proxyConfigs) {
@@ -1050,7 +1260,11 @@ async function fetchChannelRSS(channel) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
 
-      const res = await fetch(proxy.url, { signal: controller.signal, cache: 'no-store' });
+      const res = await fetch(proxy.url, {
+        signal: controller.signal,
+        cache: 'no-store',
+        headers: proxy.headers || {}
+      });
       clearTimeout(timeoutId);
 
       // Fail fast on non-OK status
@@ -1081,11 +1295,7 @@ async function fetchChannelRSS(channel) {
 
         if (videoId && title) {
           // Filter Shorts by Title (RSS Limitation)
-          const titleLower = title.toLowerCase();
-          // Improved Regex: match #shorts, #short, short videos, etc.
-          const isShortsKeyword = /#shorts?|\[shorts?\]|\(shorts?\)|\bshorts?\b/i.test(titleLower);
-
-          if (state.data.filterShorts && isShortsKeyword) {
+          if (state.data.filterShorts && isShortsTitle(title)) {
             continue;
           }
 
@@ -1127,8 +1337,9 @@ async function fetchChannelVideos(channel, startPageToken = null, forceRefresh =
       if (!chData.items || chData.items.length === 0) return [];
       uploadsPlaylistId = chData.items[0].contentDetails.relatedPlaylists.uploads;
 
-      // Save for next time!
-      channel.uploadsId = uploadsPlaylistId;
+      // Save for next time! (skip in mock mode — a fake playlist id must
+      // never be persisted, or real API calls will 400 once mock is off)
+      if (!IS_MOCK) channel.uploadsId = uploadsPlaylistId;
     } catch (e) {
       console.error(`Failed to fetch channel details for ${channel.id}`, e);
       return [];
@@ -1140,8 +1351,11 @@ async function fetchChannelVideos(channel, startPageToken = null, forceRefresh =
   // remain, fetch additional pages until we have enough or hit a limit.
   // Cost: 2 units per extra page (1 playlistItems + 1 videos detail check).
   // Most channels won't trigger extra pages, keeping quota usage low.
-  const MIN_DESIRED_VIDEOS = 5;  // Target minimum long videos per channel
-  const MAX_PAGES = 3;           // Safety cap: max pages to fetch (max 6 extra units)
+  // Quota math: each extra page costs 2 units (playlistItems + videos detail),
+  // and ytFetch caches every URL for 24h, so worst case is ~10 units per
+  // channel per day — trivial against the 10,000/day default quota.
+  const MIN_DESIRED_VIDEOS = 12; // Target minimum long videos per channel
+  const MAX_PAGES = 5;           // Safety cap: max pages to fetch
   const isLoadMore = !!startPageToken; // If called with a token, this is a "Load More" request
 
   let allFilteredVideos = [];
@@ -1299,6 +1513,7 @@ function parseDuration(duration) {
 // --- Sorting Logic ---
 function sortVideos(sortType) {
   state.currentSort = sortType;
+  localStorage.setItem(STORAGE_KEY_SORT, sortType); // remember across reloads
   updateSortUI();
   renderVideos();
 }
@@ -1313,13 +1528,47 @@ function updateSortUI() {
   });
 }
 
+// --- Parent Audit Log ---
+// Records settings changes on this device so parents can always see what was
+// changed (kids old enough to solve a math gate can't hide their tracks).
+const STORAGE_KEY_AUDIT = 'kiddolens_audit_log';
+const MAX_AUDIT_ENTRIES = 100;
+
+function logAudit(msgKey, vars = {}) {
+  try {
+    const log = JSON.parse(localStorage.getItem(STORAGE_KEY_AUDIT) || '[]');
+    log.unshift({ msg: t(msgKey, vars), ts: Date.now() });
+    localStorage.setItem(STORAGE_KEY_AUDIT, JSON.stringify(log.slice(0, MAX_AUDIT_ENTRIES)));
+  } catch (e) { /* ignore */ }
+}
+
+function renderAuditLog() {
+  const el = document.getElementById('audit-log-list');
+  if (!el) return;
+  let log = [];
+  try { log = JSON.parse(localStorage.getItem(STORAGE_KEY_AUDIT) || '[]'); } catch (e) { /* ignore */ }
+
+  if (log.length === 0) {
+    el.innerHTML = `<p class="small-text" style="color:#999;">${t('audit_empty')}</p>`;
+    return;
+  }
+
+  el.innerHTML = log.slice(0, 50).map(entry => `
+    <div class="audit-item">
+      <span class="audit-time">${relativeTime(entry.ts)}</span>
+      <span class="audit-msg">${esc(entry.msg)}</span>
+    </div>
+  `).join('');
+}
+
 // --- Watch History & Interest Scoring ---
 
 function recordWatch(video) {
   const profile = getCurrentProfile();
   if (!profile) return;
   const key = STORAGE_KEY_WATCH_HISTORY + profile.id;
-  const history = JSON.parse(localStorage.getItem(key) || '[]');
+  // Re-watching a video moves it to the top instead of duplicating the entry
+  const history = JSON.parse(localStorage.getItem(key) || '[]').filter(h => h.videoId !== video.id);
   history.unshift({
     videoId: video.id,
     title: video.title,
@@ -1463,6 +1712,8 @@ function stopWatchTimer() {
   }
 }
 
+let _limitWarningShown = false; // ensures the 5-minute warning fires exactly once
+
 function checkWatchTimeLimit() {
   const profile = getCurrentProfile();
   if (!profile || !profile.dailyLimit) return;
@@ -1470,7 +1721,9 @@ function checkWatchTimeLimit() {
   const elapsed = _watchTimerStart ? (Date.now() - _watchTimerStart) / 1000 : 0;
   const todayTotal = getTodayWatchSeconds(profile.id) + elapsed;
   const remaining = limitSec - todayTotal;
-  if (remaining <= 300 && remaining > 290) {
+  if (remaining > 300) _limitWarningShown = false;
+  if (remaining <= 300 && remaining > 0 && !_limitWarningShown) {
+    _limitWarningShown = true;
     showWatchTimeWarning(Math.ceil(remaining / 60));
   }
   if (remaining <= 0) {
@@ -1497,11 +1750,16 @@ function updateTimeIndicator() {
 }
 
 function showWatchTimeWarning(minutesLeft) {
-  const toast = document.getElementById('api-status');
-  if (!toast) return;
-  toast.textContent = t('time_limit_warning', { n: minutesLeft });
-  toast.className = 'status-toast warning show';
-  setTimeout(() => toast.classList.remove('show'), 6000);
+  // Show the warning where the child is actually looking: inside the player.
+  // (The settings toast is invisible while the settings panel is closed.)
+  const wrapper = document.querySelector('#player-modal .video-wrapper');
+  if (!wrapper) return;
+  wrapper.querySelector('.time-warning-banner')?.remove();
+  const banner = document.createElement('div');
+  banner.className = 'time-warning-banner';
+  banner.textContent = t('time_limit_warning', { n: minutesLeft });
+  wrapper.appendChild(banner);
+  setTimeout(() => banner.remove(), 8000);
 }
 
 function pauseAndShowTimeLimitReached() {
@@ -1548,10 +1806,9 @@ async function fetchMissingChannelIcons() {
   if (state.data.apiKey) {
     const ids = missingIcons.map(c => c.id).join(',');
     try {
-      const res = await fetch(
+      const data = await ytFetch(
         `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`
       );
-      const data = await res.json();
       if (data.items) {
         let updated = false;
         data.items.forEach(item => {
@@ -1598,10 +1855,22 @@ async function fetchRankingsRaw() {
   if (_rankingsFetchPromise) return _rankingsFetchPromise;
 
   const run = async () => {
+    // 24h localStorage cache — makes the wizard & manage-channel modal open instantly
+    const CACHE_KEY = 'kiddolens_rankings_cache';
+    try {
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+      if (cached && cached.data?.length && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
+        return cached.data;
+      }
+    } catch (e) { /* ignore bad cache */ }
+
     try {
       const { data, error } = await supabase.rpc('get_channel_rankings');
       if (error) throw new Error(error.message);
-      if (data && data.length > 0) return data;
+      if (data && data.length > 0) {
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data })); } catch (e) { /* full */ }
+        return data;
+      }
     } catch (e) {
       console.warn('Supabase rankings fetch failed, using curated fallback:', e);
     }
@@ -1728,17 +1997,12 @@ function renderChannelNav() {
     btn.className = `nav-item ${state.activeChannelId === channel.id ? 'active' : ''}`;
     btn.title = channel.name; // Tooltip
 
-    let avatarSrc = channel.thumbnail;
-    if (!avatarSrc) {
-      // Fallback avatar
-      avatarSrc = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128`;
-    }
-
-    const fallbackSrc = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128`;
+    const fallbackSrc = avatarFallbackUrl(channel.name);
+    const avatarSrc = channel.thumbnail || fallbackSrc;
 
     btn.innerHTML = `
-            <img src="${avatarSrc}" class="nav-pill-icon" alt="${channel.name}" onerror="this.onerror=null;this.src='${fallbackSrc}'" />
-            <span>${channel.name}</span>
+            <img src="${esc(avatarSrc)}" class="nav-pill-icon" alt="${esc(channel.name)}" onerror="this.onerror=null;this.src='${fallbackSrc}'" />
+            <span>${esc(channel.name)}</span>
         `;
     btn.onclick = () => filterVideos(channel.id);
     channelNav.appendChild(btn);
@@ -1746,8 +2010,21 @@ function renderChannelNav() {
 
 }
 
+/** Returns the child's last-used channel filter, or null if it no longer exists */
+function restoreActiveChannel(profileId) {
+  const saved = localStorage.getItem(STORAGE_KEY_ACTIVE_CHANNEL + profileId);
+  if (!saved) return null;
+  const profile = state.data.profiles.find(p => p.id === profileId);
+  return profile?.channels.some(c => c.id === saved) ? saved : null;
+}
+
 function filterVideos(channelId) {
   state.activeChannelId = channelId;
+  // Remember this child's channel filter across reloads
+  const profileId = getCurrentProfile().id;
+  if (channelId) localStorage.setItem(STORAGE_KEY_ACTIVE_CHANNEL + profileId, channelId);
+  else localStorage.removeItem(STORAGE_KEY_ACTIVE_CHANNEL + profileId);
+
   const label = document.getElementById('active-channel-display');
 
   if (label) {
@@ -1783,7 +2060,7 @@ function renderProfileDropdown() {
     if (p.id === state.data.currentProfileId) li.classList.add('active');
 
     // Add icon for better visual
-    li.innerHTML = `<span style="margin-right:6px; font-size:1.2rem;">${p.avatar}</span> ${p.name}`;
+    li.innerHTML = `<span style="margin-right:6px; font-size:1.2rem;">${p.avatar}</span> ${esc(p.name)}`;
 
     li.onclick = (e) => {
       e.stopPropagation();
@@ -1853,7 +2130,7 @@ function renderProfileList() {
                 </button>
 
                 <div class="profile-click-area" style="flex:1; display:flex; flex-direction:column; justify-content:center; cursor: pointer;">
-                    <span style="font-weight:600; font-size:1rem;">${p.name}</span>
+                    <span style="font-weight:600; font-size:1rem;">${esc(p.name)}</span>
                     <span style="font-size:0.8rem; color:#888;">${p.channels.length} channels</span>
                 </div>
 
@@ -1910,6 +2187,9 @@ function renderProfileList() {
       if (profile) {
         profile.dailyLimit = parseInt(sel.value, 10);
         saveLocalData();
+        const limitLabel = profile.dailyLimit === 0 ? t('no_limit') : `${profile.dailyLimit} ${t('minutes')}`;
+        logAudit('audit_limit_changed', { name: profile.name, limit: limitLabel });
+        renderAuditLog();
         updateTimeIndicator();
         renderProfileList(); // re-render to show/hide "used today" label
       }
@@ -1929,14 +2209,13 @@ function renderVideos() {
   // Double-Check Filter: Re-apply Shorts filter (Title-based) for cached data
   // This handles the case where old cache contains Shorts, or API filter missed them.
   if (state.data.filterShorts) {
-    const shortsRegex = /#shorts?|\[shorts?\]|\(shorts?\)|\bshorts?\b/i;
     displayVideos = displayVideos.filter(v => {
       // If we have duration (new cache), use it!
       if (v.duration && v.duration > 0) {
         return v.duration > 90;
       }
       // Fallback: Filter by Title
-      return !shortsRegex.test(v.title.toLowerCase());
+      return !isShortsTitle(v.title);
     });
   }
 
@@ -1957,23 +2236,37 @@ function renderVideos() {
     return;
   }
 
+  const playlistIds = new Set(getPlaylist(getCurrentProfile().id).map(v => v.id));
+
   displayVideos.forEach(video => {
     const card = document.createElement('div');
     card.className = 'video-card';
     card.onclick = () => openPlayer(video);
+    const inQueue = playlistIds.has(video.id);
     card.innerHTML = `
       <div class="thumbnail-wrapper">
-        <img src="${video.thumbnail}" alt="${video.title}" class="thumbnail-img" loading="lazy" />
+        <img src="${esc(video.thumbnail)}" alt="${esc(video.title)}" class="thumbnail-img" loading="lazy" />
         <div class="play-icon-overlay">▶</div>
+        <button class="card-queue-btn${inQueue ? ' in-queue' : ''}"
+          title="${t(inQueue ? 'playlist_remove_tip' : 'playlist_add_tip')}">${inQueue ? '✓' : '+'}</button>
       </div>
       <div class="card-content">
-        <h3 class="card-title">${video.title}</h3>
+        <h3 class="card-title">${esc(video.title)}</h3>
         <div class="card-meta">
-          <span>${video.channelTitle}</span>
+          <span>${esc(video.channelTitle)}</span>
           <span>${new Date(video.publishedAt).toLocaleDateString()}</span>
         </div>
       </div>
     `;
+    card.querySelector('.card-queue-btn').onclick = (e) => {
+      e.stopPropagation();
+      togglePlaylistVideo(video);
+      const nowIn = isInPlaylist(video.id);
+      const btn = e.currentTarget;
+      btn.classList.toggle('in-queue', nowIn);
+      btn.textContent = nowIn ? '✓' : '+';
+      btn.title = t(nowIn ? 'playlist_remove_tip' : 'playlist_add_tip');
+    };
     videoContainer.appendChild(card);
   });
 
@@ -2048,10 +2341,14 @@ async function loadMoreChannelVideos(channelId) {
       // Update cache
       const profile = getCurrentProfile();
       const cacheKey = `safetube_v2_${profile.id}`;
-      localStorage.setItem(cacheKey, JSON.stringify({
-        timestamp: Date.now(),
-        videos: state.videos
-      }));
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({
+          timestamp: Date.now(),
+          videos: state.videos,
+          channelIds: profile.channels.map(c => c.id),
+          nextPageTokens: state.channelNextPageTokens
+        }));
+      } catch (e) { console.warn('localStorage full, skipping video cache save'); }
 
       console.log(`Loaded ${uniqueNew.length} more videos for ${channel.name}`);
     }
@@ -2068,81 +2365,447 @@ async function loadMoreChannelVideos(channelId) {
   }
 }
 
-function renderChannelList() {
-  if (!channelList) return;
-  const profile = getCurrentProfile();
-  channelList.innerHTML = '';
-  profile.channels.forEach((channel, index) => {
-    const li = document.createElement('li');
-    li.className = 'channel-item';
-    li.draggable = true;
-    li.dataset.index = index;
+// --- Parent Lock (PIN gate for switching child profiles) ---
 
-    // Drag Events
-    li.ondragstart = (e) => {
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', index);
-      li.classList.add('dragging');
-    };
-    li.ondragend = () => {
-      li.classList.remove('dragging');
-      document.querySelectorAll('.channel-item').forEach(item => item.classList.remove('drag-over'));
-    };
-    li.ondragover = (e) => {
-      e.preventDefault();
-      li.classList.add('drag-over');
-    };
-    li.ondragleave = () => {
-      li.classList.remove('drag-over');
-    };
-    li.ondrop = (e) => {
-      e.preventDefault();
-      const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
-      const toIndex = index;
+async function hashPin(pin) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('kiddolens:' + pin));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
-      if (fromIndex !== toIndex) {
-        // Reorder Array
-        const movedItem = profile.channels.splice(fromIndex, 1)[0];
-        profile.channels.splice(toIndex, 0, movedItem);
+/**
+ * Shows a 4-digit PIN dialog.
+ * opts.onSubmit(pin) returns: true → success & close; 'again' → clear input and
+ * show opts.againSubtitle (two-step confirm); false → wrong-PIN shake.
+ * opts.onCancel fires if the dialog is dismissed without success.
+ */
+function showPinDialog(opts) {
+  document.querySelector('.pin-overlay')?.remove();
 
-        saveLocalData();
-        renderChannelList();
-        renderChannelNav();
+  const overlay = document.createElement('div');
+  overlay.className = 'pin-overlay';
+  overlay.innerHTML = `
+    <div class="pin-dialog glass">
+      <div class="pin-icon">🔒</div>
+      <h3 class="pin-title">${esc(opts.title)}</h3>
+      <p class="pin-subtitle">${esc(opts.subtitle || '')}</p>
+      <input class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*"
+        maxlength="4" autocomplete="off" aria-label="PIN" />
+      <p class="pin-error">${t('pin_wrong')}</p>
+      <button class="secondary-btn pin-cancel">${t('close')}</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const input = overlay.querySelector('.pin-input');
+  const errEl = overlay.querySelector('.pin-error');
+  const subtitleEl = overlay.querySelector('.pin-subtitle');
+  const dialog = overlay.querySelector('.pin-dialog');
+  setTimeout(() => input.focus(), 60);
+
+  let succeeded = false;
+  let busy = false;
+  const close = () => {
+    overlay.remove();
+    if (!succeeded) opts.onCancel?.();
+  };
+  overlay.querySelector('.pin-cancel').onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+  input.oninput = async () => {
+    input.value = input.value.replace(/\D/g, '');
+    if (input.value.length < 4 || busy) return;
+    busy = true;
+    const res = await opts.onSubmit(input.value);
+    busy = false;
+    if (res === true) {
+      succeeded = true;
+      overlay.remove();
+    } else if (res === 'again') {
+      input.value = '';
+      errEl.classList.remove('visible');
+      if (opts.againSubtitle) subtitleEl.textContent = opts.againSubtitle;
+    } else {
+      input.value = '';
+      errEl.classList.add('visible');
+      if (opts.subtitle) subtitleEl.textContent = opts.subtitle; // restart two-step flows
+      dialog.classList.remove('shake');
+      void dialog.offsetWidth;
+      dialog.classList.add('shake');
+    }
+  };
+}
+
+/** Runs onSuccess immediately if the parent lock is off; otherwise asks for the PIN. */
+function verifyParentPin(onSuccess, onCancel) {
+  const lock = state.data.parentLock;
+  if (!lock?.enabled || !lock?.pinHash) { onSuccess(); return; }
+  showPinDialog({
+    title: t('pin_title'),
+    subtitle: t('pin_subtitle'),
+    onCancel,
+    onSubmit: async (pin) => {
+      const ok = (await hashPin(pin)) === lock.pinHash;
+      if (ok) onSuccess();
+      return ok;
+    }
+  });
+}
+
+// --- Quiz gate (Chinese-numeral math question) ---
+// Softer than a PIN: older siblings who can read Chinese numerals and do
+// arithmetic can pass (e.g. to help switch profiles); preschoolers cannot.
+
+const CN_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+
+function numToChinese(n) {
+  if (n < 10) return CN_DIGITS[n];
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  let s = (tens === 1 ? '' : CN_DIGITS[tens]) + '十';
+  if (ones) s += CN_DIGITS[ones];
+  return s;
+}
+
+function makeQuiz() {
+  const isAdd = Math.random() < 0.5;
+  let a = 11 + Math.floor(Math.random() * 39); // 11–49
+  let b = 11 + Math.floor(Math.random() * 39);
+  if (!isAdd && a < b) [a, b] = [b, a]; // keep answers positive
+  return {
+    text: `${numToChinese(a)} ${isAdd ? '加' : '減'} ${numToChinese(b)} 等於多少？`,
+    answer: isAdd ? a + b : a - b
+  };
+}
+
+function showQuizDialog(onSuccess, onCancel) {
+  document.querySelector('.pin-overlay')?.remove();
+
+  let quiz = makeQuiz();
+  const overlay = document.createElement('div');
+  overlay.className = 'pin-overlay';
+  overlay.innerHTML = `
+    <div class="pin-dialog glass">
+      <div class="pin-icon">🧮</div>
+      <h3 class="pin-title">${t('quiz_title')}</h3>
+      <p class="pin-subtitle quiz-question"></p>
+      <input class="pin-input quiz-input" type="text" inputmode="numeric" pattern="[0-9]*"
+        maxlength="3" autocomplete="off" aria-label="answer" />
+      <p class="pin-error">${t('quiz_wrong')}</p>
+      <button class="primary-btn quiz-confirm" style="width:100%; margin-top:10px;">${t('quiz_confirm')}</button>
+      <button class="secondary-btn pin-cancel">${t('close')}</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const qEl = overlay.querySelector('.quiz-question');
+  const input = overlay.querySelector('.quiz-input');
+  const errEl = overlay.querySelector('.pin-error');
+  const dialog = overlay.querySelector('.pin-dialog');
+  qEl.textContent = quiz.text;
+  setTimeout(() => input.focus(), 60);
+
+  let succeeded = false;
+  const close = () => {
+    overlay.remove();
+    if (!succeeded) onCancel?.();
+  };
+  overlay.querySelector('.pin-cancel').onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+  const check = () => {
+    const val = parseInt(input.value, 10);
+    if (Number.isNaN(val)) { input.focus(); return; }
+    if (val === quiz.answer) {
+      succeeded = true;
+      overlay.remove();
+      onSuccess();
+    } else {
+      quiz = makeQuiz(); // new question on every wrong answer (no brute-forcing one)
+      qEl.textContent = quiz.text;
+      input.value = '';
+      errEl.classList.add('visible');
+      dialog.classList.remove('shake');
+      void dialog.offsetWidth;
+      dialog.classList.add('shake');
+      input.focus();
+    }
+  };
+  overlay.querySelector('.quiz-confirm').onclick = check;
+  input.onkeydown = (e) => { if (e.key === 'Enter') check(); };
+  input.oninput = () => { input.value = input.value.replace(/\D/g, ''); };
+}
+
+/**
+ * The parent gate for switching profiles etc.: passes straight through when the
+ * lock is off, otherwise challenges with the configured mode (quiz or PIN).
+ */
+function verifyParentGate(onSuccess, onCancel) {
+  const lock = state.data.parentLock;
+  if (!lock?.enabled) { onSuccess(); return; }
+  if ((lock.mode || 'pin') === 'quiz') {
+    showQuizDialog(onSuccess, onCancel);
+    return;
+  }
+  verifyParentPin(onSuccess, onCancel);
+}
+
+/** Two-step "set new PIN" flow (enter + confirm). */
+function startSetPin(onDone, onCancel) {
+  let firstPin = null;
+  showPinDialog({
+    title: t('pin_set_title'),
+    subtitle: t('pin_set_subtitle'),
+    againSubtitle: t('pin_confirm_subtitle'),
+    onCancel,
+    onSubmit: async (pin) => {
+      if (firstPin === null) {
+        firstPin = pin;
+        return 'again';
       }
-    };
+      if (pin === firstPin) {
+        state.data.parentLock = { enabled: true, mode: 'pin', pinHash: await hashPin(pin) };
+        saveLocalData();
+        onDone?.();
+        return true;
+      }
+      firstPin = null; // mismatch → start over
+      return false;
+    }
+  });
+}
 
-    li.innerHTML = `
-      <div class="channel-item-content">
-        <span class="drag-handle">⣿</span>
-        <span class="channel-name">${channel.name || channel.id}</span>
-      </div>
-      <button class="remove-btn" data-index="${index}" title="${t('remove_channel')}">
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="3 6 5 6 21 6"></polyline>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-          <line x1="10" y1="11" x2="10" y2="17"></line>
-          <line x1="14" y1="11" x2="14" y2="17"></line>
+function updateParentLockUI() {
+  const lock = state.data.parentLock || {};
+  const cb = document.getElementById('parent-lock-checkbox');
+  if (cb) cb.checked = !!lock.enabled;
+
+  const modeRow = document.getElementById('parent-lock-mode-row');
+  if (modeRow) modeRow.style.display = lock.enabled ? 'block' : 'none';
+  document.querySelectorAll('input[name="lock-mode"]').forEach(r => {
+    r.checked = r.value === (lock.mode || 'pin');
+  });
+
+  const changeBtn = document.getElementById('change-pin-btn');
+  if (changeBtn) {
+    changeBtn.style.display = lock.enabled && (lock.mode || 'pin') === 'pin' ? 'inline-block' : 'none';
+  }
+}
+
+// --- Playlist (parent-curated queue) ---
+
+function getPlaylist(profileId) {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY_PLAYLIST + profileId) || '[]'); }
+  catch (e) { return []; }
+}
+
+function savePlaylist(profileId, list) {
+  try { localStorage.setItem(STORAGE_KEY_PLAYLIST + profileId, JSON.stringify(list)); }
+  catch (e) { console.warn('localStorage full, playlist not saved'); }
+  updatePlaylistBadge();
+  saveLocalData(); // bump lastUpdated & schedule cloud sync (playlists sync too)
+}
+
+function isInPlaylist(videoId) {
+  return getPlaylist(getCurrentProfile().id).some(v => v.id === videoId);
+}
+
+function togglePlaylistVideo(video) {
+  const profile = getCurrentProfile();
+  let list = getPlaylist(profile.id);
+  if (list.some(v => v.id === video.id)) {
+    list = list.filter(v => v.id !== video.id);
+  } else {
+    list.push({
+      id: video.id,
+      title: video.title,
+      thumbnail: video.thumbnail,
+      channelId: video.channelId || '',
+      channelTitle: video.channelTitle || '',
+      duration: video.duration
+    });
+  }
+  savePlaylist(profile.id, list);
+}
+
+function updatePlaylistBadge() {
+  const badge = document.getElementById('playlist-count-badge');
+  if (!badge) return;
+  const n = getPlaylist(getCurrentProfile().id).length;
+  badge.textContent = n;
+  badge.style.display = n > 0 ? 'flex' : 'none';
+}
+
+function startPlaylistPlayback(startIndex = 0) {
+  const list = getPlaylist(getCurrentProfile().id);
+  if (list.length === 0) return;
+  state.playQueue = list;
+  state.queueIndex = Math.min(startIndex, list.length - 1);
+  const modal = document.getElementById('playlist-modal');
+  if (modal) { modal.remove(); toggleBodyScroll(false); }
+  openPlayer(state.playQueue[state.queueIndex]);
+}
+
+function showPlaylistPanel() {
+  const existing = document.getElementById('playlist-modal');
+  if (existing) { existing.remove(); toggleBodyScroll(false); return; }
+
+  const modal = document.createElement('div');
+  modal.id = 'playlist-modal';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-content glass playlist-modal-content">
+      <button class="close-btn-corner" id="close-playlist" aria-label="Close">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
         </svg>
       </button>
+      <div class="modal-header">
+        <h2>📃 ${t('playlist')}</h2>
+      </div>
+      <p class="small-text" style="margin-top:0;">${t('playlist_hint')}</p>
+      <div class="playlist-actions-row">
+        <button id="playlist-play-all" class="primary-btn" style="flex:1;">▶ ${t('playlist_play_all')}</button>
+        <button id="playlist-clear" class="secondary-btn">${t('playlist_clear')}</button>
+      </div>
+      <ul id="playlist-list" class="playlist-list"></ul>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  toggleBodyScroll(true);
+
+  const close = () => { modal.remove(); toggleBodyScroll(false); };
+  modal.querySelector('#close-playlist').onclick = close;
+  modal.onclick = (e) => { if (e.target === modal) close(); };
+
+  modal.querySelector('#playlist-play-all').onclick = () => startPlaylistPlayback(0);
+  modal.querySelector('#playlist-clear').onclick = () => {
+    if (!confirm(t('playlist_clear_confirm'))) return;
+    savePlaylist(getCurrentProfile().id, []);
+    renderPlaylistList();
+    renderVideos(); // refresh the "+" buttons on video cards
+  };
+
+  renderPlaylistList();
+}
+
+function renderPlaylistList() {
+  const listEl = document.getElementById('playlist-list');
+  if (!listEl) return;
+  const profile = getCurrentProfile();
+  const list = getPlaylist(profile.id);
+
+  const playAllBtn = document.getElementById('playlist-play-all');
+  if (playAllBtn) playAllBtn.disabled = list.length === 0;
+
+  if (list.length === 0) {
+    listEl.innerHTML = `<li class="playlist-empty">${t('playlist_empty')}</li>`;
+    return;
+  }
+
+  let suppressClick = false; // don't start playback right after a drag-reorder
+
+  listEl.innerHTML = '';
+  list.forEach((video, index) => {
+    const li = document.createElement('li');
+    li.className = 'playlist-item';
+    li.dataset.id = video.id;
+    li.innerHTML = `
+      <span class="drag-handle" title="${t('playlist_drag_tip')}">⠿</span>
+      <span class="playlist-index">${index + 1}</span>
+      <img class="playlist-thumb" src="${esc(video.thumbnail || '')}" alt="" loading="lazy" />
+      <div class="playlist-info">
+        <div class="playlist-title">${esc(video.title)}</div>
+        <div class="playlist-channel">${esc(video.channelTitle || '')}</div>
+      </div>
+      <button class="playlist-remove" title="${t('playlist_remove_tip')}">✕</button>
     `;
-    channelList.appendChild(li);
+    li.onclick = () => {
+      if (suppressClick) return;
+      startPlaylistPlayback(index);
+    };
+    li.querySelector('.playlist-remove').onclick = (e) => {
+      e.stopPropagation();
+      savePlaylist(profile.id, getPlaylist(profile.id).filter(v => v.id !== video.id));
+      renderPlaylistList();
+      renderVideos();
+    };
+    listEl.appendChild(li);
   });
 
-  document.querySelectorAll('.remove-btn').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const idx = btn.closest('.remove-btn').getAttribute('data-index');
-      profile.channels.splice(idx, 1);
-      saveLocalData();
-      renderChannelList();
-      renderChannelNav(); // Update nav on remove
-      saveToDrive();
-    };
-  });
+  // Pointer-based drag to reorder (works with mouse & touch)
+  let dragEl = null;
+  const saveOrder = () => {
+    const byId = new Map(getPlaylist(profile.id).map(v => [v.id, v]));
+    const newOrder = [];
+    listEl.querySelectorAll('.playlist-item[data-id]').forEach(item => {
+      const v = byId.get(item.dataset.id);
+      if (v) newOrder.push(v);
+    });
+    savePlaylist(profile.id, newOrder);
+    renderPlaylistList(); // refresh index numbers
+  };
+  listEl.onpointerdown = (e) => {
+    if (!e.target.closest('.drag-handle')) return;
+    const li = e.target.closest('.playlist-item');
+    if (!li) return;
+    e.preventDefault();
+    dragEl = li;
+    listEl.setPointerCapture(e.pointerId);
+    li.classList.add('dragging');
+  };
+  listEl.onpointermove = (e) => {
+    if (!dragEl) return;
+    e.preventDefault();
+    dragEl.style.pointerEvents = 'none';
+    const below = document.elementFromPoint(e.clientX, e.clientY);
+    dragEl.style.pointerEvents = '';
+    const target = below?.closest('.playlist-item');
+    if (!target || target === dragEl) return;
+    const rect = target.getBoundingClientRect();
+    if (e.clientY < rect.top + rect.height / 2) target.before(dragEl);
+    else target.after(dragEl);
+  };
+  const endDrag = () => {
+    if (!dragEl) return;
+    dragEl.classList.remove('dragging');
+    dragEl = null;
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 100);
+    saveOrder();
+  };
+  listEl.onpointerup = endDrag;
+  listEl.onpointercancel = endDrag;
 }
 
 // --- Player Logic ---
 let activeYTPlayer = null;
+let _autoNextTimer = null; // countdown timer for auto-play next
+
+/**
+ * Picks the next video to auto-play: same pool the child currently sees
+ * (active channel filter + Shorts filter), excluding the one that just ended.
+ */
+function getNextVideo(current) {
+  let pool = state.videos;
+  if (state.activeChannelId) {
+    pool = pool.filter(v => v.channelId === state.activeChannelId);
+  }
+  if (state.data.filterShorts) {
+    pool = pool.filter(v => (v.duration && v.duration > 0) ? v.duration > 90 : !isShortsTitle(v.title));
+  }
+  pool = pool.filter(v => v.id !== current.id);
+  if (pool.length === 0) return null;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function clearAutoNextTimer() {
+  if (_autoNextTimer) {
+    clearInterval(_autoNextTimer);
+    _autoNextTimer = null;
+  }
+}
 
 function openPlayer(video) {
   recordWatch(video);
@@ -2162,6 +2825,7 @@ function openPlayer(video) {
     playerContainer.appendChild(playerDiv);
 
     activeYTPlayer = new YT.Player(playerDiv, {
+      host: 'https://www.youtube-nocookie.com', // privacy-enhanced mode: fewer tracking cookies
       videoId: video.id,
       playerVars: {
         autoplay: 1,
@@ -2186,11 +2850,14 @@ function openPlayer(video) {
     // Fallback: direct iframe (YT API not ready yet)
     activeYTPlayer = null;
     const iframe = document.createElement('iframe');
-    iframe.src = `https://www.youtube.com/embed/${video.id}?autoplay=1&rel=0&modestbranding=1&iv_load_policy=3`;
+    iframe.src = `https://www.youtube-nocookie.com/embed/${video.id}?autoplay=1&rel=0&modestbranding=1&iv_load_policy=3`;
     iframe.setAttribute('frameborder', '0');
     iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
     iframe.allowFullscreen = true;
     playerContainer.appendChild(iframe);
+    // No play/pause events available in this mode — count the whole open time
+    // so daily limits are still (approximately) enforced.
+    startWatchTimer();
   }
 }
 
@@ -2225,16 +2892,16 @@ function renderHistoryPanel() {
   }
 
   listEl.innerHTML = history.map(item => `
-    <div class="history-item" data-video-id="${item.videoId}"
-         data-title="${item.title?.replace(/"/g, '&quot;') || ''}"
-         data-thumbnail="${item.thumbnail || ''}"
-         data-channel-id="${item.channelId || ''}"
-         data-channel-title="${item.channelTitle?.replace(/"/g, '&quot;') || ''}">
-      <img class="history-thumb" src="${item.thumbnail || ''}" alt="" loading="lazy" />
+    <div class="history-item" data-video-id="${esc(item.videoId)}"
+         data-title="${esc(item.title || '')}"
+         data-thumbnail="${esc(item.thumbnail || '')}"
+         data-channel-id="${esc(item.channelId || '')}"
+         data-channel-title="${esc(item.channelTitle || '')}">
+      <img class="history-thumb" src="${esc(item.thumbnail || '')}" alt="" loading="lazy" />
       <div class="history-info">
-        <div class="history-video-title">${item.title || ''}</div>
+        <div class="history-video-title">${esc(item.title || '')}</div>
         <div class="history-meta">
-          <span class="history-channel">${item.channelTitle || ''}</span>
+          <span class="history-channel">${esc(item.channelTitle || '')}</span>
           <span class="history-time">${relativeTime(item.watchedAt)}</span>
         </div>
       </div>
@@ -2268,11 +2935,23 @@ function closeHistoryPanel() {
   toggleBodyScroll(false);
 }
 
-function showEndedOverlay(_video, player) {
+function showEndedOverlay(video, player) {
   document.querySelector('.video-ended-overlay')?.remove();
+  clearAutoNextTimer();
 
   const wrapper = document.querySelector('#player-modal .video-wrapper');
   if (!wrapper) return;
+
+  // The parent playlist queue takes priority; random auto-play (if enabled)
+  // is only the fallback when no queue is active.
+  let next = null;
+  let fromQueue = false;
+  if (state.playQueue && state.queueIndex < state.playQueue.length - 1) {
+    next = state.playQueue[state.queueIndex + 1];
+    fromQueue = true;
+  } else if (state.data.autoPlayNext) {
+    next = getNextVideo(video);
+  }
 
   const overlay = document.createElement('div');
   overlay.className = 'video-ended-overlay';
@@ -2280,24 +2959,58 @@ function showEndedOverlay(_video, player) {
     <div class="ended-content">
       <div class="ended-icon">🎬</div>
       <p class="ended-msg">${t('video_ended')}</p>
+      ${next ? `
+        <p class="autoplay-next-info">${t('autoplay_up_next')}<br><strong>${esc(next.title)}</strong></p>
+        <p class="autoplay-countdown"></p>
+      ` : ''}
       <div class="ended-actions">
         <button class="ended-btn ended-replay">↺ ${t('watch_again')}</button>
+        ${next ? `<button class="ended-btn ended-cancel-next">${t('autoplay_cancel')}</button>` : ''}
         <button class="ended-btn ended-close">✕ ${t('close')}</button>
       </div>
     </div>
   `;
 
   overlay.querySelector('.ended-replay').onclick = () => {
+    clearAutoNextTimer();
     overlay.remove();
     if (player) { player.seekTo(0); player.playVideo(); }
   };
   overlay.querySelector('.ended-close').onclick = () => closePlayer();
+
+  if (next) {
+    const countdownEl = overlay.querySelector('.autoplay-countdown');
+    let secs = fromQueue ? 5 : 10; // parent-curated queue advances faster
+    const tick = () => {
+      if (secs <= 0) {
+        clearAutoNextTimer();
+        overlay.remove();
+        if (fromQueue) state.queueIndex++;
+        openPlayer(next);
+        return;
+      }
+      countdownEl.textContent = t('autoplay_countdown', { n: secs });
+      secs--;
+    };
+    tick();
+    _autoNextTimer = setInterval(tick, 1000);
+
+    overlay.querySelector('.ended-cancel-next').onclick = () => {
+      clearAutoNextTimer();
+      overlay.querySelector('.autoplay-next-info')?.remove();
+      countdownEl?.remove();
+      overlay.querySelector('.ended-cancel-next')?.remove();
+    };
+  }
 
   wrapper.appendChild(overlay);
 }
 
 function closePlayer() {
   stopWatchTimer(); // save elapsed time before destroying player
+  clearAutoNextTimer();
+  state.playQueue = null; // closing the player ends any active playlist queue
+  state.queueIndex = 0;
   document.querySelector('.time-limit-overlay')?.remove();
   playerModal.classList.add('hidden');
   document.getElementById('youtube-player').innerHTML = '';
@@ -2313,7 +3026,6 @@ function closePlayer() {
 function openSettings() {
   settingsModal.classList.remove('hidden');
   toggleBodyScroll(true);
-  renderChannelList();
   updateProfileUI();
   const apiKeyInput = document.getElementById('api-key-input');
   if (apiKeyInput) apiKeyInput.value = state.data.apiKey;
@@ -2321,6 +3033,13 @@ function openSettings() {
   // Load Preferences
   const filterShortsCb = document.getElementById('filter-shorts-checkbox');
   if (filterShortsCb) filterShortsCb.checked = !!state.data.filterShorts;
+  const autoplayCb = document.getElementById('autoplay-next-checkbox');
+  if (autoplayCb) autoplayCb.checked = !!state.data.autoPlayNext;
+  const shareStatsCb = document.getElementById('share-stats-checkbox');
+  if (shareStatsCb) shareStatsCb.checked = !!state.data.shareStats;
+
+  updateParentLockUI();
+  renderAuditLog();
 }
 
 function closeSettings() {
@@ -2345,20 +3064,28 @@ function addProfile(name) {
     channels: []
   });
   saveLocalData();
+  logAudit('audit_profile_added', { name });
   updateProfileUI();
   newProfileNameInput.value = '';
 }
 
 function switchProfile(id) {
+  if (id === state.data.currentProfileId) return;
+  profileDropdown?.classList.add('hidden');
+  // Parent lock: little siblings can't hop onto another child's list
+  verifyParentGate(() => doSwitchProfile(id));
+}
+
+function doSwitchProfile(id) {
   stopWatchTimer(); // stop any running timer from the previous profile
   state.data.currentProfileId = id;
-  state.activeChannelId = null; // Reset filter on switch
+  state.activeChannelId = restoreActiveChannel(id); // restore this child's last channel filter
   saveLocalData();
   updateProfileUI();
-  renderChannelList();
   fetchAllVideos();
   fetchMissingChannelIcons();
   updateTimeIndicator();
+  updatePlaylistBadge();
 }
 
 function editProfileName(id) {
@@ -2367,6 +3094,7 @@ function editProfileName(id) {
 
   const newName = prompt(t('rename_prompt', { name: profile.name }), profile.name);
   if (newName && newName.trim() !== "") {
+    logAudit('audit_profile_renamed', { from: profile.name, to: newName.trim() });
     profile.name = newName.trim();
     saveLocalData();
     updateProfileUI();
@@ -2378,14 +3106,21 @@ function editProfileName(id) {
 
 function deleteProfile(id) {
   if (confirm(t('confirm_delete_profile'))) {
+    const deletedName = state.data.profiles.find(p => p.id === id)?.name || '?';
     state.data.profiles = state.data.profiles.filter(p => p.id !== id);
+    logAudit('audit_profile_deleted', { name: deletedName });
+    // Clean up this profile's local traces (watch history, watch time, video cache, playlist)
+    const prefixes = [STORAGE_KEY_WATCH_HISTORY + id, STORAGE_KEY_WATCH_TIME + id, `safetube_v2_${id}`,
+      STORAGE_KEY_PLAYLIST + id, STORAGE_KEY_ACTIVE_CHANNEL + id];
+    Object.keys(localStorage)
+      .filter(k => prefixes.some(p => k.startsWith(p)))
+      .forEach(k => localStorage.removeItem(k));
     // If deleted current, switch to first available
     if (state.data.currentProfileId === id) {
       state.data.currentProfileId = state.data.profiles[0].id; // There should always be at least one
     }
     saveLocalData();
     updateProfileUI();
-    renderChannelList();
     fetchAllVideos();
   }
 }
@@ -2406,8 +3141,7 @@ async function checkAndUploadStats(force = false) {
   // Check if we have an anonymous ID (should exist if shareStats is true)
   if (!state.data.anonymousUserId) {
     state.data.anonymousUserId = crypto.randomUUID ? crypto.randomUUID() : 'user_' + Date.now();
-    saveLocalData();
-    if (state.accessToken) saveToDrive(); // Force push ID to cloud
+    saveLocalData(); // saveLocalData already schedules a cloud sync when logged in
   }
 
   console.log('Uploading anonymous stats...');
@@ -2492,9 +3226,15 @@ function setupEventListeners() {
 
   document.getElementById('history-btn').onclick = openHistoryPanel;
   document.getElementById('close-history').onclick = closeHistoryPanel;
+
+  const playlistBtn = document.getElementById('playlist-btn');
+  if (playlistBtn) playlistBtn.onclick = showPlaylistPanel;
   document.getElementById('clear-history-btn').onclick = () => {
     const profile = getCurrentProfile();
-    if (profile) localStorage.removeItem(STORAGE_KEY_WATCH_HISTORY + profile.id);
+    if (profile) {
+      localStorage.removeItem(STORAGE_KEY_WATCH_HISTORY + profile.id);
+      logAudit('audit_history_cleared', { name: profile.name });
+    }
     renderHistoryPanel();
   };
 
@@ -2509,7 +3249,144 @@ function setupEventListeners() {
     filterShortsCb.onchange = (e) => {
       state.data.filterShorts = e.target.checked;
       saveLocalData();
+      logAudit('audit_filter_shorts', { state: t(e.target.checked ? 'state_on' : 'state_off') });
+      renderAuditLog();
       fetchAllVideos(true); // Re-fetch with new filter applied
+    };
+  }
+
+  // Autoplay Next Listener
+  const autoplayCb = document.getElementById('autoplay-next-checkbox');
+  if (autoplayCb) {
+    autoplayCb.onchange = (e) => {
+      state.data.autoPlayNext = e.target.checked;
+      saveLocalData();
+      logAudit('audit_autoplay', { state: t(e.target.checked ? 'state_on' : 'state_off') });
+      renderAuditLog();
+    };
+  }
+
+  // Anonymous Stats Listener
+  const shareStatsCb = document.getElementById('share-stats-checkbox');
+  if (shareStatsCb) {
+    shareStatsCb.onchange = (e) => {
+      state.data.shareStats = e.target.checked;
+      saveLocalData();
+      logAudit('audit_share_stats', { state: t(e.target.checked ? 'state_on' : 'state_off') });
+      renderAuditLog();
+    };
+  }
+
+  // Parent Lock listeners
+  const parentLockCb = document.getElementById('parent-lock-checkbox');
+  if (parentLockCb) {
+    parentLockCb.onchange = (e) => {
+      if (e.target.checked) {
+        // Enabling: quiz mode by default (zero-setup); keeps a previously set
+        // PIN mode if one exists. Parents pick the mode with the radios below.
+        const prev = state.data.parentLock || {};
+        state.data.parentLock = {
+          enabled: true,
+          mode: prev.pinHash ? (prev.mode || 'pin') : 'quiz',
+          pinHash: prev.pinHash || null
+        };
+        saveLocalData();
+        logAudit('audit_parent_lock', { state: t('state_on') });
+        renderAuditLog();
+        updateParentLockUI();
+      } else {
+        // Disabling requires passing the current gate (reverts if cancelled)
+        verifyParentGate(
+          () => {
+            state.data.parentLock = { ...state.data.parentLock, enabled: false };
+            saveLocalData();
+            logAudit('audit_parent_lock', { state: t('state_off') });
+            renderAuditLog();
+            updateParentLockUI();
+          },
+          () => updateParentLockUI()
+        );
+      }
+    };
+  }
+
+  // Lock mode radios (quiz ⇄ pin)
+  document.querySelectorAll('input[name="lock-mode"]').forEach(radio => {
+    radio.onchange = () => {
+      const lock = state.data.parentLock || {};
+      const target = radio.value;
+      if (!lock.enabled || target === (lock.mode || 'pin')) return;
+
+      if (target === 'pin') {
+        // Strengthening the lock — set (or reuse) a PIN
+        if (lock.pinHash) {
+          state.data.parentLock = { ...lock, mode: 'pin' };
+          saveLocalData();
+          logAudit('audit_lock_mode', { mode: t('lock_mode_pin') });
+          renderAuditLog();
+          updateParentLockUI();
+        } else {
+          startSetPin(
+            () => {
+              logAudit('audit_lock_mode', { mode: t('lock_mode_pin') });
+              renderAuditLog();
+              updateParentLockUI();
+            },
+            () => updateParentLockUI()
+          );
+        }
+      } else {
+        // Weakening pin → quiz requires the current PIN first
+        verifyParentPin(
+          () => {
+            state.data.parentLock = { ...state.data.parentLock, mode: 'quiz' };
+            saveLocalData();
+            logAudit('audit_lock_mode', { mode: t('lock_mode_quiz') });
+            renderAuditLog();
+            updateParentLockUI();
+          },
+          () => updateParentLockUI()
+        );
+      }
+    };
+  });
+
+  const changePinBtn = document.getElementById('change-pin-btn');
+  if (changePinBtn) {
+    changePinBtn.onclick = () => {
+      verifyParentPin(() => {
+        startSetPin(() => {
+          logAudit('audit_pin_changed');
+          renderAuditLog();
+          updateParentLockUI();
+        }, () => updateParentLockUI());
+      });
+    };
+  }
+
+  // Email Magic-Link Login
+  const emailLoginBtn = document.getElementById('email-login-btn');
+  if (emailLoginBtn) {
+    emailLoginBtn.onclick = async () => {
+      const input = document.getElementById('email-login-input');
+      const email = (input?.value || '').trim();
+      if (!email || !email.includes('@')) {
+        showSyncToast(t('email_login_invalid'), 'warning');
+        return;
+      }
+      emailLoginBtn.disabled = true;
+      try {
+        const { error } = await supabase.auth.signInWithOtp({
+          email,
+          options: { emailRedirectTo: window.location.origin + window.location.pathname }
+        });
+        if (error) throw error;
+        showSyncToast(t('email_login_sent'));
+      } catch (err) {
+        showSyncToast(t('save_drive_failed', { message: err.message }), 'warning');
+      } finally {
+        emailLoginBtn.disabled = false;
+      }
     };
   }
 
@@ -2584,6 +3461,7 @@ function setupEventListeners() {
 
     if (!isPro) {
       // Saving Lite Mode
+      if (state.data.apiKey) logAudit('audit_mode_changed', { mode: t('lite_mode') });
       state.data.apiKey = '';
       saveLocalData();
 
@@ -2602,6 +3480,7 @@ function setupEventListeners() {
         return;
       }
 
+      if (state.data.apiKey !== key) logAudit('audit_mode_changed', { mode: t('pro_mode') });
       state.data.apiKey = key;
       saveLocalData();
 
@@ -2616,31 +3495,23 @@ function setupEventListeners() {
     }, 3000);
   };
 
-  if (loginBtn) {
-    loginBtn.onclick = () => {
-      if (state.tokenClient) {
-        // Force consent prompt to ensure permissions are granted
-        state.tokenClient.requestAccessToken({ prompt: 'consent' });
-      } else {
-        // Should not happen if configured correctly in code
-        alert('OAuth Client ID not configured.');
-      }
-    };
-  }
-
   // Profile Listeners
   addProfileBtn.onclick = () => {
     addProfile(newProfileNameInput.value.trim());
   };
 
-  document.getElementById('close-player').onclick = closePlayer;
-
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      // Close every dismissable overlay (the onboarding wizard is intentionally
+      // NOT dismissable — removing it would leave the app in a blank state).
       closePlayer();
       closeSettings();
-      const wizard = document.querySelector('.wizard-modal');
-      if (wizard) wizard.remove();
+      closeHistoryPanel();
+      document.getElementById('add-channel-modal')?.remove();
+      document.getElementById('profile-pick-overlay')?.remove();
+      document.getElementById('playlist-modal')?.remove();
+      document.getElementById('avatar-picker-overlay')?.classList.add('hidden');
+      document.querySelector('.pin-overlay .pin-cancel')?.click(); // triggers onCancel cleanup
       toggleBodyScroll(false);
     }
 
@@ -2648,6 +3519,9 @@ function setupEventListeners() {
       if (e.target.id === 'api-key-input') {
         const btn = document.getElementById('save-api-key');
         if (btn) btn.click();
+      }
+      if (e.target.id === 'new-profile-name') {
+        addProfileBtn.click();
       }
     }
   });
@@ -2664,27 +3538,48 @@ async function showOnboardingWizard() {
 
       <!-- Branding header -->
       <div class="wizard-branding">
-        <img src="logo.svg" class="wizard-logo" alt="KiddoLens" />
+        <img src="logo-static.svg" class="wizard-logo" alt="KiddoLens" />
         <div class="wizard-step-dots">
-          <span class="wizard-dot active" id="wizard-dot-1"></span>
+          <span class="wizard-dot active" id="wizard-dot-0"></span>
+          <span class="wizard-dot" id="wizard-dot-1"></span>
           <span class="wizard-dot" id="wizard-dot-2"></span>
         </div>
       </div>
 
-      <!-- Step 1: Enter child's name -->
-      <div class="wizard-step" id="wizard-step-1">
+      <!-- Step 0: Welcome — what is this & how do I get in? -->
+      <div class="wizard-step" id="wizard-step-0">
         <h2 class="wizard-step-title">${t('welcome_title')}</h2>
+        <p class="wizard-desc">${t('welcome_intro')}</p>
+
+        <div class="wizard-feature-list">
+          <div class="wizard-feature"><span class="wizard-feature-icon">✅</span>${t('feature_whitelist')}</div>
+          <div class="wizard-feature"><span class="wizard-feature-icon">⏱️</span>${t('feature_timer')}</div>
+          <div class="wizard-feature"><span class="wizard-feature-icon">☁️</span>${t('feature_sync')}</div>
+        </div>
+
+        <button class="wizard-btn-primary" id="wizard-start-btn">${t('wizard_start_new')}</button>
+
+        <div class="wizard-divider"><span>${t('wizard_already_have')}</span></div>
+        <div id="wizard-google-container"></div>
+        <div class="wizard-email-row">
+          <input type="email" id="wizard-email-input" placeholder="${t('email_login_placeholder')}"
+            autocomplete="email" />
+          <button id="wizard-email-btn" class="secondary-btn">${t('email_login_btn')}</button>
+        </div>
+        <p id="wizard-email-status" class="wizard-email-status"></p>
+      </div>
+
+      <!-- Step 1: Enter child's name -->
+      <div class="wizard-step" id="wizard-step-1" style="display:none;">
+        <h2 class="wizard-step-title">${t('step1_title')}</h2>
         <p class="wizard-desc">${t('welcome_desc')}</p>
 
         <div class="wizard-input-group">
           <label>${t('step1_label')}</label>
-          <input type="text" id="wizard-child-name" placeholder="${t('step1_placeholder')}" autofocus autocomplete="off" />
+          <input type="text" id="wizard-child-name" placeholder="${t('step1_placeholder')}" autocomplete="off" />
         </div>
 
         <button class="wizard-btn-primary" id="wizard-next-btn" disabled>${t('next_step')}</button>
-
-        <div class="wizard-divider"><span>${t('wizard_already_have')}</span></div>
-        <div id="wizard-google-container"></div>
       </div>
 
       <!-- Step 2: Pick channels -->
@@ -2702,12 +3597,48 @@ async function showOnboardingWizard() {
   `;
   document.body.appendChild(modal);
 
-  // Step 1 Logic
+  // Step Logic
   const nameInput = modal.querySelector('#wizard-child-name');
   const nextBtn = modal.querySelector('#wizard-next-btn');
+  const step0 = modal.querySelector('#wizard-step-0');
   const step1 = modal.querySelector('#wizard-step-1');
   const step2 = modal.querySelector('#wizard-step-2');
   const googleContainer = modal.querySelector('#wizard-google-container');
+
+  // Step 0 → Step 1 (new user path)
+  modal.querySelector('#wizard-start-btn').onclick = () => {
+    step0.style.display = 'none';
+    step1.style.display = 'block';
+    modal.querySelector('#wizard-dot-1').classList.add('active');
+    setTimeout(() => nameInput.focus(), 100);
+  };
+
+  // Step 0: Email magic-link login (returning user path)
+  const wizardEmailBtn = modal.querySelector('#wizard-email-btn');
+  wizardEmailBtn.onclick = async () => {
+    const email = (modal.querySelector('#wizard-email-input')?.value || '').trim();
+    const statusEl = modal.querySelector('#wizard-email-status');
+    if (!email || !email.includes('@')) {
+      statusEl.textContent = t('email_login_invalid');
+      statusEl.classList.add('error');
+      return;
+    }
+    wizardEmailBtn.disabled = true;
+    statusEl.classList.remove('error');
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: window.location.origin + window.location.pathname }
+      });
+      if (error) throw error;
+      statusEl.textContent = t('email_login_sent');
+    } catch (err) {
+      statusEl.textContent = err.message;
+      statusEl.classList.add('error');
+    } finally {
+      wizardEmailBtn.disabled = false;
+    }
+  };
 
   // Pre-fetch channel data NOW (during Step 1, while user types name)
   // Uses shared cache so other UI panels (settings search, recommendation modal) won't re-fetch
@@ -2797,45 +3728,31 @@ async function showOnboardingWizard() {
 
     startApp();
 
-    // Show Login Tooltip
-    setTimeout(() => {
-      const tooltip = document.getElementById('onboarding-tooltip');
-      if (tooltip) {
-        const textEl = tooltip.querySelector('p');
-        if (textEl) textEl.textContent = t('onboarding_login_tooltip');
-        tooltip.classList.add('show');
-      }
-    }, 1000);
+    // Show Login Nudge
+    setTimeout(showLoginNudge, 1500);
   };
 }
 
 // Helper: Danger Zone Listener
 function setupDangerZoneListener() {
   const resetBtn = document.getElementById('reset-app-btn');
-  if (resetBtn) {
-    resetBtn.onclick = () => {
-      // Hardcoded confirmation messages as they are critical
-      if (confirm('⚠️ WARNING: This will delete ALL data on this device.\n\nAre you sure you want to reset everything?')) {
-        if (confirm('This action cannot be undone. \n(Note: Your cloud backup will NOT be deleted.)\n\nProceed with reset?')) {
-          // Clear Local Data
-          localStorage.removeItem(STORAGE_KEY_DATA);
-          localStorage.removeItem('safetube_client_id');
-          localStorage.removeItem('safetube_onboarding_dismissed');
-          localStorage.removeItem('onboarding_dismissed');
+  if (!resetBtn) return;
+  resetBtn.onclick = async () => {
+    if (!confirm(t('reset_confirm_1'))) return;
+    if (!confirm(t('reset_confirm_2'))) return;
 
-          // Google Token Logout
-          if (state.accessToken) {
-            try {
-              if (window.google) google.accounts.oauth2.revoke(state.accessToken, () => { });
-            } catch (e) { }
-          }
+    // Clear every KiddoLens-related key (settings, caches, history, watch time)
+    const PREFIXES = ['safetube_', 'yt_api_cache_', 'kiddolens_', 'onboarding_'];
+    Object.keys(localStorage)
+      .filter(k => PREFIXES.some(p => k.startsWith(p)))
+      .forEach(k => localStorage.removeItem(k));
 
-          // Reload
-          location.reload();
-        }
-      };
-    }
-  }
+    // Sign out — otherwise the active cloud session silently restores
+    // everything again on reload, making the reset appear to do nothing.
+    try { await supabase.auth.signOut(); } catch (e) { /* ignore */ }
+
+    location.reload();
+  };
 }
 
 // Top channels for instant rendering (avoid GAS cold start delay)
@@ -2868,13 +3785,13 @@ async function loadWizardRecommendations(modal, prefetchedChannels, prefetchProm
     card.dataset.name = channel.name;
     card.dataset.thumb = channel.thumbnail || '';
 
-    const thumbSrc = channel.thumbnail || `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128&rounded=true`;
-    const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}`;
+    const fallback = avatarFallbackUrl(channel.name);
+    const thumbSrc = channel.thumbnail || fallback;
 
     card.innerHTML = `
-          <img src="${thumbSrc}" class="channel-option-img" onerror="this.src='${fallback}'" loading="lazy"/>
+          <img src="${esc(thumbSrc)}" class="channel-option-img" onerror="this.onerror=null;this.src='${fallback}'" loading="lazy"/>
           <span class="channel-check-badge">✔</span>
-          <div class="channel-option-label">${channel.name}</div>
+          <div class="channel-option-label">${esc(channel.name)}</div>
        `;
 
     card.onclick = () => card.classList.toggle('selected');
@@ -2953,13 +3870,63 @@ async function showAddChannelModal() {
       <div class="modal-header" style="margin-bottom:12px;">
         <h2 style="font-size:1.2rem; margin:0;">📺 管理頻道</h2>
       </div>
-      ${hasApiKey ? `
-      <div style="position:relative;margin-bottom:14px;">
-        <input id="modal-channel-search" class="manage-search-input" type="text"
-          placeholder="搜尋 YouTube 頻道名稱…" autocomplete="off" />
-        <ul id="modal-search-results" class="search-dropdown hidden"
-          style="position:absolute;width:100%;z-index:10;top:calc(100% + 4px);left:0;"></ul>
-      </div>` : ''}
+
+      <!-- Prominent Add Channel CTA -->
+      <button id="add-channel-toggle-btn" class="add-channel-btn-cta">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        <span class="add-channel-btn-label">新增頻道</span>
+      </button>
+
+      <!-- Expandable add panel -->
+      <div id="add-channel-panel" class="add-channel-panel" style="display:none;">
+        ${hasApiKey ? `
+        <div style="position:relative;">
+          <input id="modal-channel-search" class="manage-search-input" type="text"
+            placeholder="輸入頻道名稱搜尋…" autocomplete="off" autofocus />
+          <ul id="modal-search-results" class="search-dropdown hidden"
+            style="position:absolute;width:100%;z-index:10;top:calc(100% + 4px);left:0;"></ul>
+        </div>
+        ` : `
+        <div class="api-guide-box">
+          <div class="api-guide-title">🔑 搜尋頻道需要 YouTube API Key</div>
+          <p class="api-guide-desc">目前為 <strong>Lite Mode</strong>，只能從人氣榜點擊新增頻道。若要搜尋並加入任意 YouTube 頻道，請先切換到 Pro Mode 並設定 API Key。</p>
+
+          <div class="api-guide-steps">
+            <div class="api-step">
+              <span class="api-step-num">1</span>
+              <span>點擊右上角 <strong>⚙️ 設定</strong>，關閉此視窗後可找到</span>
+            </div>
+            <div class="api-step">
+              <span class="api-step-num">2</span>
+              <span>在「連線模式」中切換到 <strong>🚀 Pro Mode</strong></span>
+            </div>
+            <div class="api-step">
+              <span class="api-step-num">3</span>
+              <span>取得 YouTube API Key（步驟如下），貼上後儲存</span>
+            </div>
+          </div>
+
+          <details class="api-how-to-get">
+            <summary>如何取得免費的 API Key？</summary>
+            <ol class="api-how-steps">
+              <li>前往 <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer">Google Cloud Console</a></li>
+              <li>點選右上角「選取專案」→「新增專案」，建立一個專案</li>
+              <li>在搜尋欄輸入 <strong>YouTube Data API v3</strong>，進入後點擊「啟用」</li>
+              <li>左側選單前往「憑證」→「建立憑證」→「API 金鑰」</li>
+              <li>複製產生的金鑰，回到 KiddoLens 設定的 Pro Mode 欄位貼上並儲存</li>
+            </ol>
+            <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" class="api-guide-link">
+              前往 Google Cloud Console ↗
+            </a>
+          </details>
+        </div>
+        `}
+      </div>
+
       <div class="rec-tabs">
         <button class="rec-tab active" data-tab="popular">🏆 人氣榜</button>
         <button class="rec-tab" data-tab="manage">↕ 頻道排序</button>
@@ -2993,6 +3960,19 @@ async function showAddChannelModal() {
   // Close
   document.getElementById('close-add-channel').onclick = () => modal.remove();
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  // Toggle add channel panel
+  const addToggleBtn = document.getElementById('add-channel-toggle-btn');
+  const addPanel = document.getElementById('add-channel-panel');
+  addToggleBtn.onclick = () => {
+    const isOpen = addPanel.style.display !== 'none';
+    addPanel.style.display = isOpen ? 'none' : '';
+    addToggleBtn.classList.toggle('open', !isOpen);
+    if (!isOpen && hasApiKey) {
+      const si = document.getElementById('modal-channel-search');
+      if (si) si.focus();
+    }
+  };
 
   // In-modal YouTube search (only when API key is set)
   if (hasApiKey) {
@@ -3057,12 +4037,13 @@ async function showAddChannelModal() {
     .catch(() => { /* curated fallback already visible */ });
 }
 
-// Format subscriber count: 1200000 → "120萬", 45000 → "4.5萬", 800 → "800"
+// Format subscriber count with natural zh units: 123000000 → "1.2億",
+// 1200000 → "120萬", 45000 → "4.5萬", 800 → "800"
 function fmtSubs(n) {
   if (!n || n < 0) return null;
-  if (n >= 10000000) return `${Math.round(n / 10000000)}千萬`;
-  if (n >= 1000000) return `${(n / 1000000).toFixed(n >= 10000000 ? 0 : 1).replace(/\.0$/, '')}百萬`;
-  if (n >= 10000) return `${Math.round(n / 10000)}萬`;
+  if (n >= 100000000) return `${(n / 100000000).toFixed(1).replace(/\.0$/, '')}億`;
+  if (n >= 100000) return `${Math.round(n / 10000)}萬`;
+  if (n >= 10000) return `${(n / 10000).toFixed(1).replace(/\.0$/, '')}萬`;
   if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}千`;
   return String(n);
 }
@@ -3114,7 +4095,7 @@ async function searchChannelsInModal(query, resultsEl, modal) {
         thumbnail: item.snippet.thumbnails.medium?.url || item.snippet.thumbnails.default?.url || ''
       };
       const isAdded = profile.channels.some(c => c.id === channelData.id);
-      const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channelData.name)}&size=88&background=random`;
+      const fallback = avatarFallbackUrl(channelData.name, 88);
 
       const ytSubs = fmtSubs(statsMap[channelData.id]);
       const kiddoCount = kiddoMap[channelData.id];
@@ -3128,10 +4109,10 @@ async function searchChannelsInModal(query, resultsEl, modal) {
       li.className = 'search-result-item';
       li.style.opacity = isAdded ? '0.6' : '1';
       li.innerHTML = `
-        <img src="${channelData.thumbnail || fallback}" class="search-avatar"
+        <img src="${esc(channelData.thumbnail || fallback)}" class="search-avatar"
           onerror="this.onerror=null;this.src='${fallback}'" />
         <div class="search-info">
-          <span class="search-name">${channelData.name}</span>
+          <span class="search-name">${esc(channelData.name)}</span>
           <div class="search-stats-row">
             ${statsHtml}
             ${isAdded ? '<span class="search-stat added-stat">✓ 已加入</span>' : ''}
@@ -3171,18 +4152,19 @@ function renderManageChannelList(listEl) {
     const li = document.createElement('li');
     li.className = 'manage-channel-item';
     li.dataset.id = channel.id;
-    const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&size=64&background=random&rounded=true`;
+    const fallback = avatarFallbackUrl(channel.name, 64);
     li.innerHTML = `
       <span class="drag-handle" title="拖曳排序">⠿</span>
-      <img src="${channel.thumbnail || fallback}" class="manage-channel-thumb"
+      <img src="${esc(channel.thumbnail || fallback)}" class="manage-channel-thumb"
         onerror="this.onerror=null;this.src='${fallback}'" />
-      <span class="manage-channel-name">${channel.name}</span>
+      <span class="manage-channel-name">${esc(channel.name)}</span>
       <button class="manage-channel-delete" title="移除頻道">✕</button>
     `;
     li.querySelector('.manage-channel-delete').onclick = (e) => {
       e.stopPropagation();
       profile.channels = profile.channels.filter(c => c.id !== channel.id);
       saveLocalData();
+      logAudit('audit_channel_removed', { channel: channel.name, profile: profile.name });
       renderChannelNav();
       fetchAllVideos();
       renderManageChannelList(listEl);
@@ -3258,16 +4240,15 @@ function renderRecGrid(grid, channels, addedIds) {
     const card = document.createElement('div');
     card.className = `channel-option-card${isAdded ? ' rec-already-added' : ''}`;
 
-    const thumbSrc = channel.thumbnail
-      || `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128&rounded=true`;
-    const fallback = `https://ui-avatars.com/api/?name=${encodeURIComponent(channel.name)}&background=random&size=128`;
+    const fallback = avatarFallbackUrl(channel.name);
+    const thumbSrc = channel.thumbnail || fallback;
 
     card.innerHTML = `
-      <img src="${thumbSrc}" class="channel-option-img" onerror="this.onerror=null;this.src='${fallback}'" loading="lazy"/>
+      <img src="${esc(thumbSrc)}" class="channel-option-img" onerror="this.onerror=null;this.src='${fallback}'" loading="lazy"/>
       <span class="channel-check-badge${isAdded ? ' badge-added' : ''}">
         ${isAdded ? '✓' : '✔'}
       </span>
-      <div class="channel-option-label">${channel.name}</div>
+      <div class="channel-option-label">${esc(channel.name)}</div>
       ${isAdded ? '<div class="rec-added-label">已加入</div>' : ''}
     `;
 
@@ -3287,6 +4268,7 @@ function handleChannelAdd(channel) {
     if (!profile.channels.some(c => c.id === channel.id)) {
       profile.channels.push({ id: channel.id, name: channel.name, thumbnail: channel.thumbnail || '' });
       saveLocalData();
+      logAudit('audit_channel_added', { channel: channel.name, profile: profile.name });
       renderChannelNav();
       fetchAllVideos();
     }
@@ -3316,13 +4298,13 @@ function showProfilePickerForChannel(channel) {
   overlay.className = 'profile-pick-overlay';
   overlay.innerHTML = `
     <div class="profile-pick-content glass">
-      <h3 style="margin:0 0 6px;font-size:1.05rem;">加入「${channel.name}」</h3>
+      <h3 style="margin:0 0 6px;font-size:1.05rem;">加入「${esc(channel.name)}」</h3>
       <p style="margin:0 0 16px;font-size:0.85rem;color:#666;">同時加入其他孩子的清單？</p>
       <div class="profile-pick-list">
         ${otherProfiles.map(p => `
           <label class="profile-pick-item">
-            <input type="checkbox" value="${p.id}">
-            <span>${p.avatar || '👤'} ${p.name}</span>
+            <input type="checkbox" value="${esc(p.id)}">
+            <span>${p.avatar || '👤'} ${esc(p.name)}</span>
           </label>
         `).join('')}
       </div>
@@ -3341,6 +4323,7 @@ function showProfilePickerForChannel(channel) {
     // Always add to current profile
     if (!currentProfile.channels.some(c => c.id === channel.id)) {
       currentProfile.channels.push({ ...newChannel });
+      logAudit('audit_channel_added', { channel: channel.name, profile: currentProfile.name });
     }
 
     // Add to each checked additional profile
@@ -3348,6 +4331,7 @@ function showProfilePickerForChannel(channel) {
       const p = state.data.profiles.find(pr => pr.id === cb.value);
       if (p && !p.channels.some(c => c.id === channel.id)) {
         p.channels.push({ ...newChannel });
+        logAudit('audit_channel_added', { channel: channel.name, profile: p.name });
       }
     });
 
