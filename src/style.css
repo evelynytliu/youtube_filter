@@ -3731,3 +3731,20 @@ button:focus-visible {
     padding: 0 16px 16px;
   }
 }
+
+/* ===== Premium Account Hint ===== */
+.premium-account-hint {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #f4f7ff;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  color: #667;
+  font-weight: normal;
+  line-height: 1.5;
+}
+
+.premium-account-hint a {
+  color: #355dce;
+  font-weight: 600;
+}

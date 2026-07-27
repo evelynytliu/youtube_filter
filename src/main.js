@@ -3214,6 +3214,7 @@ function openSettings() {
   if (autoplayCb) autoplayCb.checked = !!state.data.autoPlayNext;
   const premiumCb = document.getElementById('premium-playback-checkbox');
   if (premiumCb) premiumCb.checked = !!state.data.premiumPlayback;
+  updatePremiumAccountHint();
   const shareStatsCb = document.getElementById('share-stats-checkbox');
   if (shareStatsCb) shareStatsCb.checked = !!state.data.shareStats;
 
@@ -3224,6 +3225,21 @@ function openSettings() {
 function closeSettings() {
   settingsModal.classList.add('hidden');
   toggleBodyScroll(false);
+}
+
+/**
+ * Shown when Premium playback is on. The browser's cross-origin isolation
+ * means we cannot read which YouTube account is signed in — the best we can
+ * do is link the parent to YouTube's account page to check for themselves.
+ */
+function updatePremiumAccountHint() {
+  const hint = document.getElementById('premium-account-hint');
+  if (!hint) return;
+  hint.style.display = state.data.premiumPlayback ? 'block' : 'none';
+  const note = document.getElementById('premium-account-note');
+  if (note) note.textContent = t('premium_account_note') + ' ';
+  const link = document.getElementById('premium-account-link');
+  if (link) link.textContent = t('premium_account_check');
 }
 
 // --- Helper: Body Scroll Lock ---
@@ -3451,6 +3467,7 @@ function setupEventListeners() {
     premiumCb.onchange = (e) => {
       state.data.premiumPlayback = e.target.checked;
       saveLocalData();
+      updatePremiumAccountHint();
       logAudit('audit_premium_playback', { state: t(e.target.checked ? 'state_on' : 'state_off') });
       renderAuditLog();
     };

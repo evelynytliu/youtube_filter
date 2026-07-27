@@ -232,6 +232,8 @@ export const translations = {
     premium_playback: { en: "YouTube Premium playback (ad-free)", zh: "YouTube Premium 播放（免廣告）" },
     premium_playback_desc: { en: "Uses the standard player that follows this browser's signed-in YouTube account — Premium members get no ads. When off, the privacy-enhanced player is used (no tracking, but ads may show even for Premium members).", zh: "使用一般播放器，跟隨此瀏覽器登入的 YouTube 帳號——Premium 會員即無廣告。關閉時使用隱私加強播放器（不追蹤，但即使是 Premium 會員也可能出現廣告）。" },
     audit_premium_playback: { en: "Premium playback: {state}", zh: "Premium 播放：{state}" },
+    premium_account_note: { en: "Browsers don't let this site read which YouTube account is signed in.", zh: "瀏覽器不允許本網站讀取目前登入的 YouTube 帳號。" },
+    premium_account_check: { en: "Open YouTube to check the signed-in account ↗", zh: "開啟 YouTube 確認登入帳號 ↗" },
 
     // Onboarding welcome step
     welcome_intro: { en: "Your kids only watch YouTube channels you approve — no algorithm, no surprises.", zh: "孩子只看你核准的 YouTube 頻道——沒有演算法推薦、沒有奇怪影片。" },
