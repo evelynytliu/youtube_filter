@@ -228,6 +228,11 @@ export const translations = {
     audit_parent_lock: { en: "Parent lock: {state}", zh: "家長鎖：{state}" },
     audit_pin_changed: { en: "Parent PIN changed", zh: "變更家長 PIN" },
 
+    // Premium playback
+    premium_playback: { en: "YouTube Premium playback (ad-free)", zh: "YouTube Premium 播放（免廣告）" },
+    premium_playback_desc: { en: "Uses the standard player that follows this browser's signed-in YouTube account — Premium members get no ads. When off, the privacy-enhanced player is used (no tracking, but ads may show even for Premium members).", zh: "使用一般播放器，跟隨此瀏覽器登入的 YouTube 帳號——Premium 會員即無廣告。關閉時使用隱私加強播放器（不追蹤，但即使是 Premium 會員也可能出現廣告）。" },
+    audit_premium_playback: { en: "Premium playback: {state}", zh: "Premium 播放：{state}" },
+
     // Onboarding welcome step
     welcome_intro: { en: "Your kids only watch YouTube channels you approve — no algorithm, no surprises.", zh: "孩子只看你核准的 YouTube 頻道——沒有演算法推薦、沒有奇怪影片。" },
     feature_whitelist: { en: "Parents pick the channels; kids stay inside the list", zh: "家長挑頻道，孩子只能看清單內的影片" },

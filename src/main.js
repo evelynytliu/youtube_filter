@@ -387,6 +387,10 @@ const DEFAULT_DATA = {
   anonymousUserId: null, // Generated upon opt-in
   filterShorts: true, // Default ON
   autoPlayNext: false, // Default OFF - parent opt-in for continuous play
+  // OFF = privacy-enhanced player (youtube-nocookie, no tracking, but YouTube
+  // Premium ad-free does NOT apply). ON = standard player that follows the
+  // browser's signed-in YouTube account (Premium = no ads).
+  premiumPlayback: false,
   parentLock: { enabled: false, mode: 'quiz', pinHash: null } // gate for switching child profiles ('quiz' | 'pin')
 };
 
@@ -558,6 +562,10 @@ function updateLanguageUI() {
   if (ssLabel) ssLabel.textContent = t('participate_ranking');
   const ssDesc = document.getElementById('share-stats-desc');
   if (ssDesc) ssDesc.textContent = t('ranking_desc');
+  const ppLabel = document.getElementById('premium-playback-label');
+  if (ppLabel) ppLabel.textContent = t('premium_playback');
+  const ppDesc = document.getElementById('premium-playback-desc');
+  if (ppDesc) ppDesc.textContent = t('premium_playback_desc');
 
   // Parent Audit Log
   const auditTitle = document.getElementById('audit-title');
@@ -2991,7 +2999,9 @@ function openPlayer(video) {
     playerContainer.appendChild(playerDiv);
 
     activeYTPlayer = new YT.Player(playerDiv, {
-      host: 'https://www.youtube-nocookie.com', // privacy-enhanced mode: fewer tracking cookies
+      // Premium playback follows the browser's YouTube login (ad-free for
+      // Premium members); otherwise use the privacy-enhanced nocookie player.
+      host: state.data.premiumPlayback ? 'https://www.youtube.com' : 'https://www.youtube-nocookie.com',
       videoId: video.id,
       playerVars: {
         autoplay: 1,
@@ -3016,7 +3026,8 @@ function openPlayer(video) {
     // Fallback: direct iframe (YT API not ready yet)
     activeYTPlayer = null;
     const iframe = document.createElement('iframe');
-    iframe.src = `https://www.youtube-nocookie.com/embed/${video.id}?autoplay=1&rel=0&modestbranding=1&iv_load_policy=3`;
+    const embedHost = state.data.premiumPlayback ? 'https://www.youtube.com' : 'https://www.youtube-nocookie.com';
+    iframe.src = `${embedHost}/embed/${video.id}?autoplay=1&rel=0&modestbranding=1&iv_load_policy=3`;
     iframe.setAttribute('frameborder', '0');
     iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
     iframe.allowFullscreen = true;
@@ -3201,6 +3212,8 @@ function openSettings() {
   if (filterShortsCb) filterShortsCb.checked = !!state.data.filterShorts;
   const autoplayCb = document.getElementById('autoplay-next-checkbox');
   if (autoplayCb) autoplayCb.checked = !!state.data.autoPlayNext;
+  const premiumCb = document.getElementById('premium-playback-checkbox');
+  if (premiumCb) premiumCb.checked = !!state.data.premiumPlayback;
   const shareStatsCb = document.getElementById('share-stats-checkbox');
   if (shareStatsCb) shareStatsCb.checked = !!state.data.shareStats;
 
@@ -3428,6 +3441,17 @@ function setupEventListeners() {
       state.data.autoPlayNext = e.target.checked;
       saveLocalData();
       logAudit('audit_autoplay', { state: t(e.target.checked ? 'state_on' : 'state_off') });
+      renderAuditLog();
+    };
+  }
+
+  // Premium Playback Listener
+  const premiumCb = document.getElementById('premium-playback-checkbox');
+  if (premiumCb) {
+    premiumCb.onchange = (e) => {
+      state.data.premiumPlayback = e.target.checked;
+      saveLocalData();
+      logAudit('audit_premium_playback', { state: t(e.target.checked ? 'state_on' : 'state_off') });
       renderAuditLog();
     };
   }
