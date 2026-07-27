@@ -1009,6 +1009,41 @@ const CACHE_DURATION = 1000 * 60 * 60; // 1 Hour
 // Mock mode (local dev only): all YouTube API calls return fake data to save quota
 const IS_MOCK = import.meta.env.VITE_USE_MOCK_YOUTUBE_API === 'true';
 
+/**
+ * Builds a YouTube Data API URL.
+ * With a personal API key set (Pro Mode) → direct googleapis call, own quota.
+ * Without one → the shared server-side proxy (yt-proxy edge function): the
+ * central key never reaches the browser, and responses are cached server-side
+ * so one upstream fetch serves every user.
+ */
+function ytUrl(op, params = {}) {
+  if (state.data.apiKey) {
+    const key = state.data.apiKey;
+    const base = 'https://www.googleapis.com/youtube/v3';
+    switch (op) {
+      case 'channel_uploads':
+        return `${base}/channels?part=contentDetails&id=${params.id}&key=${key}`;
+      case 'channel_snippet':
+        return `${base}/channels?part=snippet&id=${params.id}&key=${key}`;
+      case 'channel_statistics':
+        return `${base}/channels?part=statistics&id=${params.id}&key=${key}`;
+      case 'playlist_items': {
+        let u = `${base}/playlistItems?part=snippet&playlistId=${params.playlistId}&maxResults=${params.max || 20}&key=${key}`;
+        if (params.pageToken) u += `&pageToken=${params.pageToken}`;
+        return u;
+      }
+      case 'video_details':
+        return `${base}/videos?part=contentDetails&id=${params.id}&key=${key}`;
+      case 'channel_search':
+        return `${base}/search?part=snippet&type=channel&q=${encodeURIComponent(params.q)}&maxResults=6&key=${key}`;
+      case 'channel_playlists':
+        return `${base}/playlists?part=snippet,contentDetails&channelId=${params.channelId}&maxResults=25&key=${key}`;
+    }
+  }
+  const qs = new URLSearchParams({ op, ...params }).toString();
+  return `${supabaseUrl}/functions/v1/yt-proxy?${qs}`;
+}
+
 // --- Optimized API Fetcher (Mock & Cache) ---
 // Cost-saving wrapper for all YouTube API calls
 async function ytFetch(url, forceNetwork = false) {
@@ -1035,7 +1070,10 @@ async function ytFetch(url, forceNetwork = false) {
 
   // 3. Network Request (Costs Quota)
   console.log('[API Net Req] Fetching:', url.split('?')[0]);
-  const res = await fetch(url);
+  const isProxy = url.startsWith(supabaseUrl);
+  const res = await fetch(url, isProxy
+    ? { headers: { apikey: supabaseAnonKey, Authorization: `Bearer ${supabaseAnonKey}` } }
+    : undefined);
   const data = await res.json();
 
   if (res.ok) {
@@ -1062,8 +1100,9 @@ async function fetchAllVideos(forceRefresh = false) {
     return;
   }
 
-  // 0. Decide Mode: API Key vs RSS (Lite Mode)
-  const useLiteMode = !state.data.apiKey;
+  // 0. Decide Mode: API (own key OR shared proxy) vs RSS fallback.
+  // RSS is only used when the shared proxy has failed this session.
+  const useLiteMode = !state.data.apiKey && state.proxyDown === true;
 
   // 1. Check Cache (Works for both modes)
   const cacheKey = `safetube_v2_${profile.id}`;
@@ -1190,11 +1229,17 @@ async function fetchAllVideos(forceRefresh = false) {
       apiStatus.style.color = '#4ecdc4';
 
     } else {
-      // --- API Mode ---
+      // --- API Mode (own key or shared proxy) ---
       const validChannels = profile.channels.filter(c => c && c.id);
       const promises = validChannels.map(channel => fetchChannelVideos(channel, null, forceRefresh));
       const results = await Promise.all(promises);
       checkVideos = results.flat().sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+
+      // Shared proxy returned nothing at all → probably down/unconfigured;
+      // throw so the catch below retries once via RSS Lite Mode.
+      if (checkVideos.length === 0 && !state.data.apiKey && !state.proxyDown && validChannels.length > 0) {
+        throw new Error('shared-proxy-empty');
+      }
 
       apiStatus.textContent = t('status_updated');
       apiStatus.style.color = '#4ecdc4';
@@ -1225,6 +1270,12 @@ async function fetchAllVideos(forceRefresh = false) {
     renderVideos();
 
   } catch (error) {
+    // Shared proxy unavailable → retry once via RSS Lite Mode
+    if (!useLiteMode && !state.data.apiKey && !state.proxyDown) {
+      console.warn('Shared API proxy unavailable — falling back to RSS mode', error);
+      state.proxyDown = true;
+      return fetchAllVideos(forceRefresh);
+    }
     if (useLiteMode) {
       console.error('RSS Lite Mode Error:', error);
       apiStatus.textContent = t('error_rss');
@@ -1338,7 +1389,7 @@ async function fetchChannelVideos(channel, startPageToken = null, forceRefresh =
 
   if (!uploadsPlaylistId) {
     // Fetch uploads ID cost: 1 unit
-    const channelUrl = `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${channel.id}&key=${state.data.apiKey}`;
+    const channelUrl = ytUrl('channel_uploads', { id: channel.id });
     try {
       const chData = await ytFetch(channelUrl, forceRefresh);
 
@@ -1373,10 +1424,9 @@ async function fetchChannelVideos(channel, startPageToken = null, forceRefresh =
   try {
     do {
       // Fetch Videos cost: 1 unit per page
-      let plUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=20&key=${state.data.apiKey}`;
-      if (nextPageToken) {
-        plUrl += `&pageToken=${nextPageToken}`;
-      }
+      const plParams = { playlistId: uploadsPlaylistId };
+      if (nextPageToken) plParams.pageToken = nextPageToken;
+      const plUrl = ytUrl('playlist_items', plParams);
 
       const plData = await ytFetch(plUrl, forceRefresh);
 
@@ -1390,7 +1440,7 @@ async function fetchChannelVideos(channel, startPageToken = null, forceRefresh =
       if (state.data.filterShorts) {
         // Check duration to filter Shorts. Cost: 1 unit per batch.
         const videoIds = rawItems.map(item => item.snippet.resourceId.videoId).join(',');
-        const detailsUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoIds}&key=${state.data.apiKey}`;
+        const detailsUrl = ytUrl('video_details', { id: videoIds });
 
         // Build title lookup from rawItems (already have snippet from playlistItems)
         const titleMap = new Map(rawItems.map(item => [
@@ -1841,12 +1891,10 @@ async function fetchMissingChannelIcons() {
   if (missingIcons.length === 0) return; // all thumbnails present (loaded from Supabase) — done
 
   // Option 1: YouTube Data API — one batch request for all missing channels
-  if (state.data.apiKey) {
+  if (state.data.apiKey || state.proxyDown !== true) {
     const ids = missingIcons.map(c => c.id).join(',');
     try {
-      const data = await ytFetch(
-        `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`
-      );
+      const data = await ytFetch(ytUrl('channel_snippet', { id: ids }));
       if (data.items) {
         let updated = false;
         data.items.forEach(item => {
@@ -2308,8 +2356,8 @@ function renderVideos() {
     videoContainer.appendChild(card);
   });
 
-  // --- "Load More" Button (API Mode) ---
-  if (state.activeChannelId && state.data.apiKey) {
+  // --- "Load More" Button (API Mode: own key or shared proxy) ---
+  if (state.activeChannelId && (state.data.apiKey || state.proxyDown !== true)) {
     const nextToken = state.channelNextPageTokens[state.activeChannelId];
     if (nextToken) {
       const loadMoreContainer = document.createElement('div');
@@ -2330,8 +2378,8 @@ function renderVideos() {
       document.getElementById('load-more-btn').onclick = () => loadMoreChannelVideos(state.activeChannelId);
     }
   }
-  // --- "Watch on YouTube" Button (Lite Mode) ---
-  else if (state.activeChannelId && !state.data.apiKey) {
+  // --- "Watch on YouTube" Button (RSS fallback mode) ---
+  else if (state.activeChannelId) {
     const profile = getCurrentProfile();
     const channel = profile.channels.find(c => c.id === state.activeChannelId);
     if (channel) {
@@ -2741,7 +2789,7 @@ function showPlaylistPanel() {
     const showing = importArea.style.display !== 'none';
     importArea.style.display = showing ? 'none' : 'block';
     if (showing) return;
-    if (!state.data.apiKey) {
+    if (!state.data.apiKey && state.proxyDown === true) {
       modal.querySelector('#import-status').textContent = t('playlist_import_need_api');
       return;
     }
@@ -2782,9 +2830,7 @@ async function loadChannelPlaylists(modal, channel, chip) {
 
   try {
     // Cost: 1 unit (cached 24h by ytFetch)
-    const data = await ytFetch(
-      `https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&channelId=${channel.id}&maxResults=25&key=${state.data.apiKey}`
-    );
+    const data = await ytFetch(ytUrl('channel_playlists', { channelId: channel.id }));
     if (!modal.isConnected) return;
 
     const playlists = (data.items || []).map(p => ({
@@ -2827,9 +2873,7 @@ async function importYtPlaylist(modal, pl) {
 
   try {
     // Cost: 1 unit (cached 24h)
-    const data = await ytFetch(
-      `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${pl.id}&maxResults=50&key=${state.data.apiKey}`
-    );
+    const data = await ytFetch(ytUrl('playlist_items', { playlistId: pl.id, max: 50 }));
     const videos = (data.items || [])
       .filter(i => {
         const title = i.snippet?.title;
@@ -4060,7 +4104,8 @@ async function showAddChannelModal() {
   const existing = document.getElementById('add-channel-modal');
   if (existing) { existing.remove(); return; }
 
-  const hasApiKey = !!state.data.apiKey;
+  // Search works with a personal key OR through the shared proxy
+  const hasApiKey = !!state.data.apiKey || state.proxyDown !== true;
 
   const modal = document.createElement('div');
   modal.id = 'add-channel-modal';
@@ -4222,12 +4267,10 @@ async function showAddChannelModal() {
       if (!document.getElementById('add-channel-modal')) return;
 
       const missing = channels.filter(ch => !ch.thumbnail);
-      if (missing.length > 0 && state.data.apiKey) {
+      if (missing.length > 0 && (state.data.apiKey || state.proxyDown !== true)) {
         try {
           const ids = missing.map(ch => ch.id).join(',');
-          const data = await ytFetch(
-            `https://www.googleapis.com/youtube/v3/channels?part=snippet&id=${ids}&key=${state.data.apiKey}`
-          );
+          const data = await ytFetch(ytUrl('channel_snippet', { id: ids }));
           if (data.items) {
             data.items.forEach(item => {
               const ch = channels.find(c => c.id === item.id);
@@ -4257,15 +4300,13 @@ function fmtSubs(n) {
 
 // Search YouTube channels inside the manage-channel modal
 async function searchChannelsInModal(query, resultsEl, modal) {
-  if (!state.data.apiKey || !modal.isConnected) return;
+  if (!modal.isConnected) return;
   resultsEl.innerHTML = '<li style="padding:10px;color:#aaa;">搜尋中…</li>';
   resultsEl.classList.remove('hidden');
 
   try {
-    // 1. Search for channels
-    const searchData = await ytFetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&q=${encodeURIComponent(query)}&maxResults=6&key=${state.data.apiKey}`
-    );
+    // 1. Search for channels (100 units — heavily cached server-side)
+    const searchData = await ytFetch(ytUrl('channel_search', { q: query }));
     if (!modal.isConnected) return;
 
     const items = searchData.items || [];
@@ -4278,9 +4319,7 @@ async function searchChannelsInModal(query, resultsEl, modal) {
     const ids = items.map(i => i.snippet.channelId).join(',');
     let statsMap = {};
     try {
-      const statsData = await ytFetch(
-        `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${ids}&key=${state.data.apiKey}`
-      );
+      const statsData = await ytFetch(ytUrl('channel_statistics', { id: ids }));
       (statsData.items || []).forEach(ch => {
         statsMap[ch.id] = parseInt(ch.statistics?.subscriberCount || '0', 10);
       });
